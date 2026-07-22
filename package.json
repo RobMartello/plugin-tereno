@@ -5,12 +5,24 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build"
   },
-  "keywords": ["elizaos", "eliza", "plugin", "x402", "base", "usdc", "tereno", "agent"],
+  "keywords": [
+    "elizaos",
+    "eliza",
+    "plugin",
+    "x402",
+    "base",
+    "usdc",
+    "tereno",
+    "agent"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/RobMartello/plugin-tereno.git"
@@ -49,6 +61,7 @@
   },
   "devDependencies": {
     "@elizaos/core": "^1.7.2",
+    "@types/node": "^26.1.1",
     "typescript": "^5.0.0",
     "viem": "^2.52.0"
   }
