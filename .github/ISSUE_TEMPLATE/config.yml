@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Quick questions / setup help
+    url: https://discord.gg/YsgGSRBxn
+    about: The Tereno Discord is the fastest place for usage questions and wiring help.
+  - name: Capability catalog & docs
+    url: https://www.tereno.xyz/api/v1/capabilities
+    about: Live catalog with prices, status and endpoints.
+  - name: Security vulnerabilities
+    url: https://github.com/RobMartello/plugin-tereno/security/advisories/new
+    about: Please report vulnerabilities privately — never in a public issue.

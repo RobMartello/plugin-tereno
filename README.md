@@ -79,6 +79,12 @@ earns 20% of every settled cross-wallet reuse as non-transferable credits
 (spendable on the guard capabilities). Open demand is public at
 `GET https://www.tereno.xyz/api/v1/bounties`.
 
+## Support
+
+- **Quick questions / setup help**: [Tereno Discord](https://discord.gg/YsgGSRBxn) — fastest answer
+- **Bugs**: [open an issue](https://github.com/RobMartello/plugin-tereno/issues) — never paste private keys or `.env`
+- **Vulnerabilities**: [report privately](https://github.com/RobMartello/plugin-tereno/security/advisories/new), see [SECURITY.md](SECURITY.md)
+
 ## Links
 
 - Catalog: <https://www.tereno.xyz/api/v1/capabilities>

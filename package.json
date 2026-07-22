@@ -25,7 +25,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/RobMartello/plugin-tereno.git"
+    "url": "git+https://github.com/RobMartello/plugin-tereno.git"
   },
   "agentConfig": {
     "pluginType": "elizaos:plugin:1.0.0",

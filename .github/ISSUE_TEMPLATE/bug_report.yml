@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in plugin-tereno is not working as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## ⚠️ NEVER paste secrets here
+        This plugin handles a wallet. **Do NOT paste `TERENO_PRIVATE_KEY`, `EVM_PRIVATE_KEY`, your `.env` file, or any seed phrase.** Issues are public and indexed forever. If you already pasted a key anywhere public, consider that wallet compromised and move the funds now.
+  - type: checkboxes
+    attributes:
+      label: Secrets check
+      options:
+        - label: I confirm this report contains no private keys, seed phrases or `.env` contents
+          required: true
+  - type: input
+    attributes:
+      label: plugin-tereno version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: ElizaOS / @elizaos/core version
+      placeholder: "1.7.2"
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Network
+      options:
+        - eip155:8453 (Base mainnet)
+        - eip155:84532 (Base Sepolia)
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: The action you triggered, what you expected, and what you got instead. Include the error text (redact anything sensitive).
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Receipt URL or invocation id (if a paid call was involved)
+      description: Receipts are public and contain no secrets — they help a lot. Failed calls are never charged.
