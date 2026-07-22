@@ -1,0 +1,55 @@
+{
+  "name": "plugin-tereno",
+  "version": "0.1.0",
+  "description": "ElizaOS plugin for Tereno: paid Base preflight verdicts and chain-data reads over x402 (USDC), with per-call and daily budget caps.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "keywords": ["elizaos", "eliza", "plugin", "x402", "base", "usdc", "tereno", "agent"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RobMartello/plugin-tereno.git"
+  },
+  "agentConfig": {
+    "pluginType": "elizaos:plugin:1.0.0",
+    "pluginParameters": {
+      "TERENO_PRIVATE_KEY": {
+        "type": "string",
+        "description": "EVM private key of the wallet that pays x402 calls (needs USDC on Base). Falls back to EVM_PRIVATE_KEY."
+      },
+      "TERENO_MAX_PRICE_USD": {
+        "type": "string",
+        "description": "Per-call USDC cap. Default 0.005."
+      },
+      "TERENO_DAILY_BUDGET_USD": {
+        "type": "string",
+        "description": "Rolling daily USDC budget. Default 0.05."
+      },
+      "TERENO_PRIVATE_ONLY": {
+        "type": "string",
+        "description": "Set to true to refuse paid actions from public Discord/Telegram/Twitter sources."
+      },
+      "TERENO_NETWORK": {
+        "type": "string",
+        "description": "eip155:8453 (Base mainnet, default) or eip155:84532 (Base Sepolia)."
+      }
+    }
+  },
+  "dependencies": {
+    "tereno-client": "^0.1.0"
+  },
+  "peerDependencies": {
+    "@elizaos/core": ">=1.0.0",
+    "viem": "^2.52.0"
+  },
+  "devDependencies": {
+    "@elizaos/core": "^1.7.2",
+    "typescript": "^5.0.0",
+    "viem": "^2.52.0"
+  }
+}
