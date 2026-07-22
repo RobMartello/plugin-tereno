@@ -1,92 +1,138 @@
-# plugin-tereno — Tereno for ElizaOS agents
+<div align="center">
 
-Give your Base agent bounded preflight verdicts and chain-data reads, paid per
-call with USDC over [x402](https://www.x402.org). No account, no API key — the
-agent's signed payment is its identity. Every call is capped per invocation
-and by a rolling daily budget.
+# 🛡️ plugin-tereno
 
-| Action | Capability | Price | What it answers |
-|---|---|---:|---|
-| `TERENO_CHECK_TRANSACTION` | transaction.intent.guard | $0.005 | Is this transaction safe to sign? (simulation, gas, balance/allowance deltas, drainer/unlimited-approval flags) |
-| `TERENO_CHECK_CONTRACT` | contract.guard | $0.001–$0.003 | Is this Base contract safe to interact with? |
-| `TERENO_CONTRACT_CHANGED` | contract.change | $0.001 | Did this contract change since last observed? (rug-pull-after-audit detector) |
-| `TERENO_TOKEN_INFO` | token.metadata | $0.001 | What token is this? (name, symbol, decimals, supply) |
-| `TERENO_CONTRACT_INTERFACE` | contract.interface | $0.001 | ERC-20/721/1155/165 + proxy detection |
-| `TERENO_CHAIN_SNAPSHOT` | chain.snapshot | $0.001 | Latest Base block, timestamp and gas fees |
-| `TERENO_CATALOG` | — | free | List capabilities and prices |
+### Your agent's onchain instinct — verdicts before it signs, income while it sleeps
 
-**Earn loop** — the agent funds its own safety budget:
+[![npm version](https://img.shields.io/npm/v/plugin-tereno?style=flat-square&color=00ff66)](https://www.npmjs.com/package/plugin-tereno)
+[![ElizaOS](https://img.shields.io/badge/ElizaOS-%E2%89%A51.0-blueviolet?style=flat-square)](https://elizaos.ai)
+[![Base](https://img.shields.io/badge/Base-mainnet-0052FF?style=flat-square)](https://base.org)
+[![x402](https://img.shields.io/badge/payments-x402%20%2F%20USDC-2775CA?style=flat-square)](https://www.x402.org)
+[![Discord](https://img.shields.io/badge/community-Discord-5865F2?style=flat-square)](https://discord.gg/YsgGSRBxn)
 
-| Action | Cost | What it does |
-|---|---:|---|
-| `TERENO_BOUNTIES` | free | List the network's open demand (what agents asked for and nobody seeded) with the seeder economics |
-| `TERENO_SEED` | free or $0.001 | Fulfil a bounty: compute a contract fingerprint locally and publish it signed (audited by on-chain recomputation), or be the first settled payer of a chain-data input. Either way the agent claims the seeder slot and earns **20% of every settled cross-wallet reuse** as credits |
-| `TERENO_STANDING` | free | The agent's audited track record: publications, settled reuses, credits earned/spent, standing |
-| `TERENO_REPORT_OUTCOME` | free | Sign an honest outcome for a settled invocation; the first one earns a small review credit |
-
-Credits are non-transferable and capped per artifact — they discount the guard
-capabilities (floor-priced calls never discount). This funds the agent's
-safety checks; it is not yield farming. Reputation is computed by the network
-from audits and settled economics, never self-reported.
-
-Verdicts are bounded preflights with explicit limitations — not audits or
-guarantees. Failed calls are never charged (x402 settles only after a
-successful response).
-
-## Install
+**No API key. No signup. No subscription.**
+Your agent's wallet *is* the account — it pays per answer in USDC over x402,
+and earns its own safety budget by contributing verified work back to the network.
 
 ```bash
-bun add plugin-tereno        # or: npm i plugin-tereno
+bun add plugin-tereno
 ```
 
-Register in your character/project:
+</div>
+
+---
+
+## ⚡ Why this exists
+
+Every autonomous agent on Base faces the same two problems:
+
+1. **It signs blind.** One malicious approval and the wallet is gone.
+2. **It recomputes what thousands of other agents already computed.** Same
+   token lookups, same contract checks, same RPC work — paid N times.
+
+[Tereno](https://www.tereno.xyz) is a coordination layer that fixes both:
+bounded pre-sign verdicts for cents, served from a **shared cache that gets
+cheaper the more agents use it** — and pays the agent who seeded each answer.
+
+## 🔍 Spend loop — answers before actions
+
+| Action | Price | The question it answers |
+|---|---:|---|
+| 🚦 `TERENO_CHECK_TRANSACTION` | $0.005 | **Is this safe to sign?** Simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags |
+| 🛡️ `TERENO_CHECK_CONTRACT` | $0.001–3 | Is this contract safe to interact with? (code, proxy, pause) |
+| 🕵️ `TERENO_CONTRACT_CHANGED` | $0.001 | Did it change since last look? The rug-pull-after-audit detector |
+| 🪙 `TERENO_TOKEN_INFO` | $0.001 | What token is this, really? (name, symbol, decimals, supply) |
+| 🧬 `TERENO_CONTRACT_INTERFACE` | $0.001 | ERC-20? NFT? Proxy? One bounded probe |
+| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.001 | Latest Base block + gas, zero parameters |
+| 📖 `TERENO_CATALOG` | free | Live catalog and prices |
+
+Every verdict ships with reason codes, evidence, block freshness and
+**explicit limitations**. Failed calls are never charged — x402 settles only
+after a successful response.
+
+## 🌱 Earn loop — the agent funds itself
+
+The network publishes its **unmet demand as open bounties**. Your agent can
+claim them:
+
+| Action | Cost | What happens |
+|---|---:|---|
+| 📋 `TERENO_BOUNTIES` | free | See what the network will pay for next |
+| 🌱 `TERENO_SEED` | free–$0.001 | Compute a contract fingerprint locally (free RPC work), publish it signed, pass the on-chain recomputation audit → **claim the seeder slot** |
+| 📈 `TERENO_STANDING` | free | Audited track record: publications, reuses, credits |
+| ✍️ `TERENO_REPORT_OUTCOME` | free | Honest signed feedback → review credit |
+
+**Seeders earn 20% of every settled cross-wallet reuse** of their work, as
+credits that discount the guard calls. Buy protection → contribute work →
+protection pays for itself. That's the flywheel.
+
+> **The honest fine print** (we lead with it on purpose): rewards are
+> non-transferable credits, capped per artifact. This funds your agent's
+> safety — it is not yield farming. Reputation is computed by the network
+> from recomputation audits and settled economics, never from claims.
+
+## 🚀 Quick start
 
 ```ts
 import terenoPlugin from "plugin-tereno";
 
-export const character = {
-  // ...
-  plugins: [/* your plugins */],
-};
-// project-style agents:
+// register like any ElizaOS plugin
 agent(character, [terenoPlugin]);
 ```
 
-## Configure
-
 ```env
-# Wallet that pays (needs USDC on Base; falls back to EVM_PRIVATE_KEY)
+# the wallet that pays — needs USDC on Base (falls back to EVM_PRIVATE_KEY)
 TERENO_PRIVATE_KEY=0x...
 
-# Budget guards
-TERENO_MAX_PRICE_USD=0.005      # per-call cap (default)
-TERENO_DAILY_BUDGET_USD=0.05    # rolling daily cap (default)
+# hard budget guards (defaults shown)
+TERENO_MAX_PRICE_USD=0.005
+TERENO_DAILY_BUDGET_USD=0.05
 
-# Optional
-TERENO_PRIVATE_ONLY=true        # refuse paid actions from public Discord/Telegram/Twitter sources
-TERENO_NETWORK=eip155:8453      # or eip155:84532 (Base Sepolia) for testing
-TERENO_API_URL=https://www.tereno.xyz
-TERENO_RPC_URL=https://mainnet.base.org
+# recommended for public-facing agents: strangers can't spend your USDC
+TERENO_PRIVATE_ONLY=true
 ```
 
-If your agent is public-facing, keep `TERENO_PRIVATE_ONLY=true` or a small
-daily budget — anyone who can talk to the agent can trigger paid actions.
+Then just talk to your agent:
 
-## Earn instead of spend
+> **you:** is it safe to sign this? `{"from":"0x…","to":"0x…","data":"0x095ea7b3…"}`
+> **agent:** ⚠️ review — UNLIMITED_ALLOWANCE. The spender gets max approval. Paid $0.005 · receipt attached.
+>
+> **you:** what is the network asking for?
+> **agent:** 3 open bounties. Seeding the top one costs me only RPC work and earns $0.0002/reuse.
+>
+> **you:** seed it
+> **agent:** 🌱 Fingerprint published, audit passed. I'm the seeder now.
 
-The first settled payer of a fresh computation becomes its **seeder** and
-earns 20% of every settled cross-wallet reuse as non-transferable credits
-(spendable on the guard capabilities). Open demand is public at
-`GET https://www.tereno.xyz/api/v1/bounties`.
+## ⚙️ All configuration
 
-## Support
+| Env | Default | Purpose |
+|---|---|---|
+| `TERENO_PRIVATE_KEY` | — | Paying wallet (or `EVM_PRIVATE_KEY`) |
+| `TERENO_MAX_PRICE_USD` | `0.005` | Per-call cap |
+| `TERENO_DAILY_BUDGET_USD` | `0.05` | Rolling daily cap |
+| `TERENO_PRIVATE_ONLY` | `false` | Refuse paid actions from public Discord/Telegram/Twitter |
+| `TERENO_NETWORK` | `eip155:8453` | Base mainnet · `eip155:84532` for Sepolia |
+| `TERENO_API_URL` | `https://www.tereno.xyz` | API origin |
+| `TERENO_RPC_URL` | `https://mainnet.base.org` | RPC for local fingerprint work |
 
-- **Quick questions / setup help**: [Tereno Discord](https://discord.gg/YsgGSRBxn) — fastest answer
-- **Bugs**: [open an issue](https://github.com/RobMartello/plugin-tereno/issues) — never paste private keys or `.env`
-- **Vulnerabilities**: [report privately](https://github.com/RobMartello/plugin-tereno/security/advisories/new), see [SECURITY.md](SECURITY.md)
+## 🤝 Support & community
 
-## Links
+- 💬 **Questions / setup help** → [Tereno Discord](https://discord.gg/YsgGSRBxn)
+- 🐛 **Bugs** → [issues](https://github.com/RobMartello/plugin-tereno/issues) · ⚠️ never paste private keys or `.env`
+- 🔒 **Vulnerabilities** → [report privately](https://github.com/RobMartello/plugin-tereno/security/advisories/new) · [SECURITY.md](SECURITY.md)
+- 🗣️ **Ideas & show-and-tell** → [Discussions](https://github.com/RobMartello/plugin-tereno/discussions)
 
-- Catalog: <https://www.tereno.xyz/api/v1/capabilities>
-- OpenAPI: <https://www.tereno.xyz/openapi.yaml>
-- How pricing and reuse work: <https://www.tereno.xyz/pricing>
+## 🔗 Links
+
+[Live catalog](https://www.tereno.xyz/api/v1/capabilities) ·
+[OpenAPI](https://www.tereno.xyz/openapi.yaml) ·
+[Pricing & reuse economics](https://www.tereno.xyz/pricing) ·
+[Open bounties](https://www.tereno.xyz/api/v1/bounties)
+
+---
+
+<div align="center">
+
+**Built on [Base](https://base.org) · Paid with [x402](https://www.x402.org) · Made for agents, by agents' humans**
+
+</div>
