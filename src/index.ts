@@ -79,21 +79,115 @@ function sourceAllowed(message: Memory): boolean {
   return source !== "discord" && source !== "telegram" && source !== "twitter";
 }
 
+interface Risk {
+  code?: string;
+  severity?: "low" | "medium" | "high" | string;
+  title?: string;
+}
+
 interface VerdictResult {
   verdict?: string;
-  result?: { summary?: string; reasonCodes?: string[]; agentNote?: string; validUntilBlock?: number };
+  invocationId?: string;
+  result?: {
+    summary?: string;
+    reasonCodes?: string[];
+    agentNote?: string;
+    validUntilBlock?: number;
+    risks?: Risk[];
+    balanceDeltas?: unknown;
+    allowanceChanges?: unknown;
+  };
   pricing?: { pricePaidUsd?: number };
   receiptUrl?: string;
 }
 
-function formatVerdict(data: VerdictResult, baseUrl: string): string {
-  const icon = data.verdict === "allow" ? "✅" : data.verdict === "review" ? "⚠️" : "⛔";
+// ————— Standardized verdict (issue #3) —————
+// Every guard action returns this stable shape so integrators branch on one
+// contract. `raw` preserves the full Tereno CapabilityResult unchanged.
+export type Decision = "allow" | "review" | "block";
+export type RiskLevel = "none" | "low" | "medium" | "high";
+export type RecommendedAction = "sign" | "review" | "abort";
+
+export interface TerenoVerdict {
+  decision: Decision;
+  riskLevel: RiskLevel;
+  reason: string;
+  exposure: {
+    balanceDeltas?: unknown;
+    allowanceChanges?: unknown;
+    unlimitedApproval: boolean;
+  };
+  cost: { paidUsd: number; capUsd: number; dailySpentUsd: number };
+  recommendedAction: RecommendedAction;
+  receiptUrl: string | null;
+  raw: VerdictResult;
+}
+
+const UNLIMITED_APPROVAL_CODES = /unlimited|max_?approval|infinite/i;
+const DRAINER_CODES = /drainer|sweep|malicious|scam/i;
+
+function toDecision(verdict: string | undefined): Decision {
+  return verdict === "allow" || verdict === "block" ? verdict : "review";
+}
+
+function toRiskLevel(data: VerdictResult, decision: Decision): RiskLevel {
+  const risks = data.result?.risks ?? [];
+  const severities = risks.map((r) => (r.severity || "").toLowerCase());
+  if (severities.includes("high")) return "high";
+  if (severities.includes("medium")) return "medium";
+  const codes = (data.result?.reasonCodes ?? []).join(" ");
+  if (DRAINER_CODES.test(codes)) return "high";
+  if (UNLIMITED_APPROVAL_CODES.test(codes)) return "medium";
+  if (severities.includes("low") || (data.result?.reasonCodes?.length ?? 0) > 0) {
+    return "low";
+  }
+  // No explicit risks: infer a floor from the decision.
+  return decision === "block" ? "high" : decision === "review" ? "low" : "none";
+}
+
+function toRecommendedAction(decision: Decision): RecommendedAction {
+  return decision === "allow" ? "sign" : decision === "block" ? "abort" : "review";
+}
+
+/** Map a raw Tereno CapabilityResult into the stable TerenoVerdict shape. */
+export function normalizeVerdict(
+  data: VerdictResult,
+  cost: { capUsd: number; dailySpentUsd: number },
+  baseUrl: string,
+): TerenoVerdict {
+  const decision = toDecision(data.verdict);
+  const codes = (data.result?.reasonCodes ?? []).join(" ");
+  const reason = [data.result?.summary, data.result?.reasonCodes?.join(", ")]
+    .filter(Boolean)
+    .join(" — ") || "no reason provided";
+  return {
+    decision,
+    riskLevel: toRiskLevel(data, decision),
+    reason,
+    exposure: {
+      balanceDeltas: data.result?.balanceDeltas,
+      allowanceChanges: data.result?.allowanceChanges,
+      unlimitedApproval: UNLIMITED_APPROVAL_CODES.test(codes),
+    },
+    cost: {
+      paidUsd: data.pricing?.pricePaidUsd ?? 0,
+      capUsd: cost.capUsd,
+      dailySpentUsd: cost.dailySpentUsd,
+    },
+    recommendedAction: toRecommendedAction(decision),
+    receiptUrl: data.receiptUrl ? `${baseUrl}${data.receiptUrl}` : null,
+    raw: data,
+  };
+}
+
+function formatVerdict(v: TerenoVerdict): string {
+  const icon = v.decision === "allow" ? "✅" : v.decision === "review" ? "⚠️" : "⛔";
   const lines = [
-    `${icon} Tereno verdict: ${data.verdict ?? "unknown"}`,
-    data.result?.summary ?? null,
-    data.result?.reasonCodes?.length ? `Reasons: ${data.result.reasonCodes.join(", ")}` : null,
-    data.pricing?.pricePaidUsd !== undefined ? `Paid: $${data.pricing.pricePaidUsd} USDC (x402)` : null,
-    data.receiptUrl ? `Receipt: ${baseUrl}${data.receiptUrl}` : null,
+    `${icon} Tereno: ${v.decision.toUpperCase()} · risk ${v.riskLevel} · → ${v.recommendedAction}`,
+    v.reason,
+    v.exposure.unlimitedApproval ? "⚠️ unlimited approval detected" : null,
+    `Paid: $${v.cost.paidUsd} USDC (x402) · cap $${v.cost.capUsd}/call · $${v.cost.dailySpentUsd.toFixed(3)} today`,
+    v.receiptUrl ? `Receipt: ${v.receiptUrl}` : null,
   ];
   return lines.filter(Boolean).join("\n");
 }
@@ -131,8 +225,14 @@ function paidAction(config: {
       try {
         const tereno = client();
         const { data } = await tereno.invokeCapability<VerdictResult>(input);
-        spentTodayUsd += data.pricing?.pricePaidUsd ?? perCall;
-        return respond(formatVerdict(data, env("TERENO_API_URL", "https://www.tereno.xyz")), true, data);
+        const paid = data.pricing?.pricePaidUsd ?? perCall;
+        spentTodayUsd += paid;
+        const verdict = normalizeVerdict(
+          data,
+          { capUsd: perCall, dailySpentUsd: spentTodayUsd },
+          env("TERENO_API_URL", "https://www.tereno.xyz"),
+        );
+        return respond(formatVerdict(verdict), true, verdict);
       } catch (error) {
         logger.warn({ error, action: config.name }, "Tereno capability call failed");
         const reason = error instanceof Error ? error.message : String(error);
