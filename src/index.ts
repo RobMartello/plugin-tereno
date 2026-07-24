@@ -14,6 +14,7 @@ import type {
   State,
 } from "@elizaos/core";
 import { logger } from "@elizaos/core";
+import { createHash } from "node:crypto";
 import { createPublicClient, http, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
@@ -87,6 +88,77 @@ function failVerdict(reason: string, financial: boolean): TerenoVerdict {
     riskLevel: abort ? "high" : "medium",
     reason: `${reason} (fail-${failClosed() ? "closed" : "open"})`,
     recommendedAction: abort ? "abort" : "review",
+  });
+}
+
+// ————— Anonymous telemetry (issues #9/#10) —————
+// Opt-out (TERENO_TELEMETRY=off). STRICT allowlist below — this is the ONLY
+// data ever transmitted. Never the private key, prompt, secrets or tx content.
+const PLUGIN_VERSION = "0.2.0";
+
+function telemetryEnabled(): boolean {
+  return env("TERENO_TELEMETRY").toLowerCase() !== "off";
+}
+
+/** sha256(address) truncated — anonymized wallet, never the address in clear. */
+function walletHash(): string | null {
+  const wallet = agentWallet();
+  return wallet
+    ? createHash("sha256").update(wallet).digest("hex").slice(0, 32)
+    : null;
+}
+
+/** Best-effort cross-wallet cache-hit signal from the raw response. */
+function readCacheHit(data: VerdictResult): boolean {
+  const raw = data as unknown as Record<string, unknown>;
+  const status = (data.result as Record<string, unknown> | undefined)?.[
+    "cacheStatus"
+  ];
+  return status === "hit" || raw["cached"] === true;
+}
+
+let paidCallCount = 0;
+
+interface TelemetryEvent {
+  event: "init" | "check";
+  checkType?: string;
+  completed?: boolean;
+  paid?: boolean;
+  costUsd?: number;
+  cacheHit?: boolean;
+  repeat?: boolean;
+  error?: string | null;
+}
+
+/** Fire-and-forget anonymized beacon. Never blocks or throws into the loop. */
+function sendTelemetry(e: TelemetryEvent): void {
+  if (!telemetryEnabled()) return;
+  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz");
+  const url = env("TERENO_TELEMETRY_URL", `${baseUrl}/api/v1/telemetry`);
+  // Explicit allowlist — do not spread arbitrary objects in here.
+  const payload = {
+    pluginVersion: PLUGIN_VERSION,
+    walletHash: walletHash(),
+    network: env("TERENO_NETWORK", "eip155:8453"),
+    event: e.event,
+    checkType: e.checkType ?? null,
+    completed: e.completed ?? null,
+    paid: e.paid ?? null,
+    costUsd: e.costUsd ?? null,
+    cacheHit: e.cacheHit ?? null,
+    repeat: e.repeat ?? null,
+    error: e.error ?? null,
+  };
+  void fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-tereno-client": `plugin-tereno@${PLUGIN_VERSION}`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(4000),
+  }).catch(() => {
+    /* telemetry must never affect the agent */
   });
 }
 
@@ -274,6 +346,13 @@ function paidAction(config: {
       }
 
       if (!underDailyBudget(perCall)) {
+        sendTelemetry({
+          event: "check",
+          checkType: input.capabilityId,
+          completed: false,
+          paid: false,
+          error: "budget_exhausted",
+        });
         const v = failVerdict("daily USDC budget exhausted", financial);
         return respond(formatVerdict(v), false, v);
       }
@@ -282,6 +361,18 @@ function paidAction(config: {
         const { data } = await tereno.invokeCapability<VerdictResult>(input);
         const paid = data.pricing?.pricePaidUsd ?? perCall;
         spentTodayUsd += paid;
+        const repeat = paidCallCount > 0;
+        paidCallCount += 1;
+        sendTelemetry({
+          event: "check",
+          checkType: input.capabilityId,
+          completed: true,
+          paid: true,
+          costUsd: paid,
+          cacheHit: readCacheHit(data),
+          repeat,
+          error: null,
+        });
         const verdict = normalizeVerdict(
           data,
           { capUsd: perCall, dailySpentUsd: spentTodayUsd },
@@ -291,6 +382,13 @@ function paidAction(config: {
       } catch (error) {
         logger.warn({ error, action: config.name }, "Tereno capability call failed");
         const reason = error instanceof Error ? error.message : String(error);
+        sendTelemetry({
+          event: "check",
+          checkType: input.capabilityId,
+          completed: false,
+          paid: false,
+          error: "integration_error",
+        });
         // Nothing was charged (x402 settles only on success). Fail-mode decides
         // whether a financial action aborts or degrades to review.
         const v = failVerdict(`guard unavailable: ${reason}`, financial);
@@ -675,6 +773,10 @@ const previewAction: Action = {
 
 export const terenoPlugin: Plugin = {
   name: "plugin-tereno",
+  // Anonymous init beacon (plugin_initializations). Never blocks startup.
+  init: async () => {
+    sendTelemetry({ event: "init" });
+  },
   description:
     "Pre-signature security layer for ElizaOS agents on Base: before an agent signs, buy a bounded verdict flagging unlimited approvals, suspicious contracts, unexpected balance changes and abnormal gas. Budget-capped (per-call + daily), fail-closed by default, standardized verdict, dry-run mode.",
   actions: [
