@@ -22,6 +22,14 @@ hours.
   vulnerability.
 - With `TERENO_PRIVATE_ONLY=true`, paid actions must refuse public
   Discord/Telegram/Twitter sources. Bypass is a vulnerability.
+- **Fail-closed by default.** With `TERENO_FAIL_MODE=closed` (default), a
+  financial check that cannot settle (error, timeout, exhausted budget) returns
+  `recommendedAction: "abort"`. No mode ever returns `"sign"` on a failed check.
+- **Telemetry is a strict allowlist.** When enabled (opt-out via
+  `TERENO_TELEMETRY=off`), the ONLY fields transmitted are: `pluginVersion`,
+  `walletHash` (sha256, never the address), `network`, `event`, `checkType`,
+  `completed`, `paid`, `costUsd`, `cacheHit`, `repeat`, `error`. Any private key,
+  prompt, secret or transaction content appearing in telemetry is a vulnerability.
 - Server-side issues (the Tereno API itself) can also be reported here; they
   will be routed to the platform.
 
