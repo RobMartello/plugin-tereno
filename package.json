@@ -1,23 +1,31 @@
 {
   "name": "plugin-tereno",
-  "version": "0.1.0",
-  "description": "ElizaOS plugin for Tereno: paid Base preflight verdicts and chain-data reads over x402 (USDC), with per-call and daily budget caps.",
+  "version": "0.2.0",
+  "description": "Pre-signature security layer for ElizaOS agents on Base: buy a bounded verdict (unlimited-approval, drainer, suspicious-contract, balance/gas anomaly) before signing. Budget-capped, fail-closed, standardized verdict, dry-run.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "images"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "bun test",
     "prepack": "npm run build"
   },
   "keywords": [
     "elizaos",
     "eliza",
     "plugin",
+    "security",
+    "pre-signature",
+    "transaction-safety",
+    "wallet-security",
+    "preflight",
+    "guard",
     "x402",
     "base",
     "usdc",
@@ -50,6 +58,18 @@
       "TERENO_NETWORK": {
         "type": "string",
         "description": "eip155:8453 (Base mainnet, default) or eip155:84532 (Base Sepolia)."
+      },
+      "TERENO_FAIL_MODE": {
+        "type": "string",
+        "description": "closed (default) makes financial checks abort when the guard cannot answer; open degrades to review. Never auto-signs on failure."
+      },
+      "TERENO_DRY_RUN": {
+        "type": "string",
+        "description": "Set to true to simulate checks with no x402 payment (works with no wallet)."
+      },
+      "TERENO_TELEMETRY": {
+        "type": "string",
+        "description": "Set to off to disable anonymous, allowlisted usage telemetry (hashed wallet only; never keys/prompts)."
       }
     }
   },

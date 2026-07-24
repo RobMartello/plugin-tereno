@@ -14,6 +14,7 @@ import type {
   State,
 } from "@elizaos/core";
 import { logger } from "@elizaos/core";
+import { createHash } from "node:crypto";
 import { createPublicClient, http, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
@@ -51,6 +52,134 @@ function underDailyBudget(nextPriceUsd: number): boolean {
   return spentTodayUsd + nextPriceUsd <= limit;
 }
 
+// Fail mode (issue #4). closed (default) = a failed/uncertain check on a
+// FINANCIAL action recommends abort; open = it degrades to review (never
+// auto-"sign"). Non-financial reads always degrade to review.
+function failClosed(): boolean {
+  return env("TERENO_FAIL_MODE", "closed").toLowerCase() !== "open";
+}
+
+// Dry-run (issue #5): wire the flow for free, no x402 payment.
+function dryRunEnabled(): boolean {
+  return env("TERENO_DRY_RUN").toLowerCase() === "true";
+}
+
+/** A synthetic verdict for dry-run / fail-mode paths (no on-chain settlement). */
+function syntheticVerdict(fields: {
+  decision: Decision;
+  riskLevel: RiskLevel;
+  reason: string;
+  recommendedAction: RecommendedAction;
+}): TerenoVerdict {
+  return {
+    ...fields,
+    exposure: { unlimitedApproval: false },
+    cost: { paidUsd: 0, capUsd: maxPriceUsd(), dailySpentUsd: spentTodayUsd },
+    receiptUrl: null,
+    raw: {},
+  };
+}
+
+/** What to return when a check cannot be settled (error/timeout/budget). */
+export function failVerdict(reason: string, financial: boolean): TerenoVerdict {
+  const abort = financial && failClosed();
+  return syntheticVerdict({
+    decision: abort ? "block" : "review",
+    riskLevel: abort ? "high" : "medium",
+    reason: `${reason} (fail-${failClosed() ? "closed" : "open"})`,
+    recommendedAction: abort ? "abort" : "review",
+  });
+}
+
+// ————— Anonymous telemetry (issues #9/#10) —————
+// Opt-out (TERENO_TELEMETRY=off). STRICT allowlist below — this is the ONLY
+// data ever transmitted. Never the private key, prompt, secrets or tx content.
+const PLUGIN_VERSION = "0.2.0";
+
+function telemetryEnabled(): boolean {
+  return env("TERENO_TELEMETRY").toLowerCase() !== "off";
+}
+
+/** sha256(address) truncated — anonymized wallet, never the address in clear. */
+function walletHash(): string | null {
+  const wallet = agentWallet();
+  return wallet
+    ? createHash("sha256").update(wallet).digest("hex").slice(0, 32)
+    : null;
+}
+
+/** Best-effort cross-wallet cache-hit signal from the raw response. */
+function readCacheHit(data: VerdictResult): boolean {
+  const raw = data as unknown as Record<string, unknown>;
+  const status = (data.result as Record<string, unknown> | undefined)?.[
+    "cacheStatus"
+  ];
+  return status === "hit" || raw["cached"] === true;
+}
+
+let paidCallCount = 0;
+
+export interface TelemetryEvent {
+  event: "init" | "check";
+  checkType?: string;
+  completed?: boolean;
+  paid?: boolean;
+  costUsd?: number;
+  cacheHit?: boolean;
+  repeat?: boolean;
+  error?: string | null;
+}
+
+/** The EXACT set of fields ever transmitted. Anything not here is a leak. */
+export const TELEMETRY_KEYS = [
+  "pluginVersion", "walletHash", "network", "event", "checkType",
+  "completed", "paid", "costUsd", "cacheHit", "repeat", "error",
+] as const;
+
+/** Pure allowlisted payload builder (issue #10). Testable; no PII/keys/prompts. */
+export function telemetryPayload(
+  e: TelemetryEvent,
+  walletHashValue: string | null,
+  network: string,
+): Record<string, unknown> {
+  return {
+    pluginVersion: PLUGIN_VERSION,
+    walletHash: walletHashValue,
+    network,
+    event: e.event,
+    checkType: e.checkType ?? null,
+    completed: e.completed ?? null,
+    paid: e.paid ?? null,
+    costUsd: e.costUsd ?? null,
+    cacheHit: e.cacheHit ?? null,
+    repeat: e.repeat ?? null,
+    error: e.error ?? null,
+  };
+}
+
+/** Fire-and-forget anonymized beacon. Never blocks or throws into the loop. */
+function sendTelemetry(e: TelemetryEvent): void {
+  if (!telemetryEnabled()) return;
+  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz");
+  const url = env("TERENO_TELEMETRY_URL", `${baseUrl}/api/v1/telemetry`);
+  const payload = telemetryPayload(
+    e,
+    walletHash(),
+    env("TERENO_NETWORK", "eip155:8453"),
+  );
+  void fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-tereno-client": `plugin-tereno@${PLUGIN_VERSION}`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(4000),
+  }).catch(() => {
+    /* telemetry must never affect the agent */
+  });
+}
+
 type TerenoAccount = NonNullable<Parameters<typeof createTerenoClient>[0]["account"]>;
 
 function client() {
@@ -79,21 +208,115 @@ function sourceAllowed(message: Memory): boolean {
   return source !== "discord" && source !== "telegram" && source !== "twitter";
 }
 
+interface Risk {
+  code?: string;
+  severity?: "low" | "medium" | "high" | string;
+  title?: string;
+}
+
 interface VerdictResult {
   verdict?: string;
-  result?: { summary?: string; reasonCodes?: string[]; agentNote?: string; validUntilBlock?: number };
+  invocationId?: string;
+  result?: {
+    summary?: string;
+    reasonCodes?: string[];
+    agentNote?: string;
+    validUntilBlock?: number;
+    risks?: Risk[];
+    balanceDeltas?: unknown;
+    allowanceChanges?: unknown;
+  };
   pricing?: { pricePaidUsd?: number };
   receiptUrl?: string;
 }
 
-function formatVerdict(data: VerdictResult, baseUrl: string): string {
-  const icon = data.verdict === "allow" ? "✅" : data.verdict === "review" ? "⚠️" : "⛔";
+// ————— Standardized verdict (issue #3) —————
+// Every guard action returns this stable shape so integrators branch on one
+// contract. `raw` preserves the full Tereno CapabilityResult unchanged.
+export type Decision = "allow" | "review" | "block";
+export type RiskLevel = "none" | "low" | "medium" | "high";
+export type RecommendedAction = "sign" | "review" | "abort";
+
+export interface TerenoVerdict {
+  decision: Decision;
+  riskLevel: RiskLevel;
+  reason: string;
+  exposure: {
+    balanceDeltas?: unknown;
+    allowanceChanges?: unknown;
+    unlimitedApproval: boolean;
+  };
+  cost: { paidUsd: number; capUsd: number; dailySpentUsd: number };
+  recommendedAction: RecommendedAction;
+  receiptUrl: string | null;
+  raw: VerdictResult;
+}
+
+const UNLIMITED_APPROVAL_CODES = /unlimited|max_?approval|infinite/i;
+const DRAINER_CODES = /drainer|sweep|malicious|scam/i;
+
+function toDecision(verdict: string | undefined): Decision {
+  return verdict === "allow" || verdict === "block" ? verdict : "review";
+}
+
+function toRiskLevel(data: VerdictResult, decision: Decision): RiskLevel {
+  const risks = data.result?.risks ?? [];
+  const severities = risks.map((r) => (r.severity || "").toLowerCase());
+  if (severities.includes("high")) return "high";
+  if (severities.includes("medium")) return "medium";
+  const codes = (data.result?.reasonCodes ?? []).join(" ");
+  if (DRAINER_CODES.test(codes)) return "high";
+  if (UNLIMITED_APPROVAL_CODES.test(codes)) return "medium";
+  if (severities.includes("low") || (data.result?.reasonCodes?.length ?? 0) > 0) {
+    return "low";
+  }
+  // No explicit risks: infer a floor from the decision.
+  return decision === "block" ? "high" : decision === "review" ? "low" : "none";
+}
+
+function toRecommendedAction(decision: Decision): RecommendedAction {
+  return decision === "allow" ? "sign" : decision === "block" ? "abort" : "review";
+}
+
+/** Map a raw Tereno CapabilityResult into the stable TerenoVerdict shape. */
+export function normalizeVerdict(
+  data: VerdictResult,
+  cost: { capUsd: number; dailySpentUsd: number },
+  baseUrl: string,
+): TerenoVerdict {
+  const decision = toDecision(data.verdict);
+  const codes = (data.result?.reasonCodes ?? []).join(" ");
+  const reason = [data.result?.summary, data.result?.reasonCodes?.join(", ")]
+    .filter(Boolean)
+    .join(" — ") || "no reason provided";
+  return {
+    decision,
+    riskLevel: toRiskLevel(data, decision),
+    reason,
+    exposure: {
+      balanceDeltas: data.result?.balanceDeltas,
+      allowanceChanges: data.result?.allowanceChanges,
+      unlimitedApproval: UNLIMITED_APPROVAL_CODES.test(codes),
+    },
+    cost: {
+      paidUsd: data.pricing?.pricePaidUsd ?? 0,
+      capUsd: cost.capUsd,
+      dailySpentUsd: cost.dailySpentUsd,
+    },
+    recommendedAction: toRecommendedAction(decision),
+    receiptUrl: data.receiptUrl ? `${baseUrl}${data.receiptUrl}` : null,
+    raw: data,
+  };
+}
+
+function formatVerdict(v: TerenoVerdict): string {
+  const icon = v.decision === "allow" ? "✅" : v.decision === "review" ? "⚠️" : "⛔";
   const lines = [
-    `${icon} Tereno verdict: ${data.verdict ?? "unknown"}`,
-    data.result?.summary ?? null,
-    data.result?.reasonCodes?.length ? `Reasons: ${data.result.reasonCodes.join(", ")}` : null,
-    data.pricing?.pricePaidUsd !== undefined ? `Paid: $${data.pricing.pricePaidUsd} USDC (x402)` : null,
-    data.receiptUrl ? `Receipt: ${baseUrl}${data.receiptUrl}` : null,
+    `${icon} Tereno: ${v.decision.toUpperCase()} · risk ${v.riskLevel} · → ${v.recommendedAction}`,
+    v.reason,
+    v.exposure.unlimitedApproval ? "⚠️ unlimited approval detected" : null,
+    `Paid: $${v.cost.paidUsd} USDC (x402) · cap $${v.cost.capUsd}/call · $${v.cost.dailySpentUsd.toFixed(3)} today`,
+    v.receiptUrl ? `Receipt: ${v.receiptUrl}` : null,
   ];
   return lines.filter(Boolean).join("\n");
 }
@@ -104,6 +327,8 @@ function paidAction(config: {
   description: string;
   buildInput: (message: Memory) => CapabilityInput | null;
   missingInputText: string;
+  /** true for actions that gate a signature/spend (fail-closed by default). */
+  financial?: boolean;
 }): Action {
   return {
     name: config.name,
@@ -125,18 +350,67 @@ function paidAction(config: {
       const input = config.buildInput(message);
       if (!input) return respond(config.missingInputText, false);
       const perCall = maxPriceUsd();
+      const financial = config.financial === true;
+
+      // Dry-run (#5): validate + shape the flow without paying.
+      if (dryRunEnabled()) {
+        const v = syntheticVerdict({
+          decision: "review",
+          riskLevel: "low",
+          reason: `dry-run: input accepted for ${input.capabilityId}; no x402 payment made. Set TERENO_DRY_RUN=false to buy the real verdict.`,
+          recommendedAction: "review",
+        });
+        return respond(`🧪 ${formatVerdict(v)}`, true, v);
+      }
+
       if (!underDailyBudget(perCall)) {
-        return respond("Tereno daily USDC budget is exhausted; try again tomorrow or raise TERENO_DAILY_BUDGET_USD.", false);
+        sendTelemetry({
+          event: "check",
+          checkType: input.capabilityId,
+          completed: false,
+          paid: false,
+          error: "budget_exhausted",
+        });
+        const v = failVerdict("daily USDC budget exhausted", financial);
+        return respond(formatVerdict(v), false, v);
       }
       try {
         const tereno = client();
         const { data } = await tereno.invokeCapability<VerdictResult>(input);
-        spentTodayUsd += data.pricing?.pricePaidUsd ?? perCall;
-        return respond(formatVerdict(data, env("TERENO_API_URL", "https://www.tereno.xyz")), true, data);
+        const paid = data.pricing?.pricePaidUsd ?? perCall;
+        spentTodayUsd += paid;
+        const repeat = paidCallCount > 0;
+        paidCallCount += 1;
+        sendTelemetry({
+          event: "check",
+          checkType: input.capabilityId,
+          completed: true,
+          paid: true,
+          costUsd: paid,
+          cacheHit: readCacheHit(data),
+          repeat,
+          error: null,
+        });
+        const verdict = normalizeVerdict(
+          data,
+          { capUsd: perCall, dailySpentUsd: spentTodayUsd },
+          env("TERENO_API_URL", "https://www.tereno.xyz"),
+        );
+        return respond(formatVerdict(verdict), true, verdict);
       } catch (error) {
         logger.warn({ error, action: config.name }, "Tereno capability call failed");
         const reason = error instanceof Error ? error.message : String(error);
-        return respond(`Tereno call did not settle (nothing was charged): ${reason}`, false);
+        sendTelemetry({
+          event: "check",
+          checkType: input.capabilityId,
+          completed: false,
+          paid: false,
+          error: "integration_error",
+        });
+        // Nothing was charged (x402 settles only on success). Fail-mode decides
+        // whether a financial action aborts or degrades to review.
+        const v = failVerdict(`guard unavailable: ${reason}`, financial);
+        return respond(formatVerdict(v), false, v);
       }
     },
     examples: [],
@@ -153,6 +427,7 @@ const checkContract = paidAction({
     return address ? { capabilityId: "contract.guard", address } : null;
   },
   missingInputText: "I need a Base contract address (0x…) to run the Tereno contract check.",
+  financial: true,
 });
 
 const tokenInfo = paidAction({
@@ -189,6 +464,7 @@ const contractChanged = paidAction({
     return address ? { capabilityId: "contract.change", address } : null;
   },
   missingInputText: "I need a Base contract address (0x…) to compare with Tereno's previous observation.",
+  financial: true,
 });
 
 const chainSnapshot = paidAction({
@@ -223,6 +499,7 @@ const checkTransaction = paidAction({
   },
   missingInputText:
     'To simulate before signing I need the unsigned transaction as JSON, e.g. {"from":"0x…","to":"0x…","data":"0x…","value":"0"}.',
+  financial: true,
 });
 
 // ————— Cooperative loop: the agent earns its own safety budget —————
@@ -482,13 +759,51 @@ const catalogAction: Action = {
   examples: [],
 };
 
+const previewAction: Action = {
+  name: "TERENO_PREVIEW",
+  similes: ["TERENO_HELP", "WHAT_CAN_TERENO_CHECK", "TERENO_COVERAGE", "TERENO_COST"],
+  description:
+    "Free: explain what the Tereno security checks cover, what each costs, and the current safety config (per-call cap, daily budget, fail mode, dry-run). No payment, no wallet needed. Use to preview before spending.",
+  validate: async () => true,
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state: State | undefined,
+    _options: unknown,
+    callback: HandlerCallback | undefined,
+  ): Promise<ActionResult> => {
+    const configured = privateKey() !== null;
+    const text = [
+      "🛡️ Tereno — pre-signature safety for Base agents. Coverage:",
+      "• TERENO_CHECK_TRANSACTION ($0.005) — is this safe to sign? simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags",
+      "• TERENO_CHECK_CONTRACT ($0.001–0.003) — is this contract safe to touch? code, proxy, pause",
+      "• TERENO_CONTRACT_CHANGED ($0.001) — did it change since last look? (rug-after-audit)",
+      "• TERENO_TOKEN_INFO / TERENO_CONTRACT_INTERFACE / TERENO_CHAIN_SNAPSHOT ($0.001) — reads",
+      "Every verdict returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
+      `Config: per-call cap $${maxPriceUsd()} · daily budget $${env("TERENO_DAILY_BUDGET_USD", "0.05")} · fail-${failClosed() ? "closed" : "open"}${dryRunEnabled() ? " · DRY-RUN (no payment)" : ""}`,
+      configured ? "Wallet configured — paid checks are available." : "No wallet configured yet — set TERENO_PRIVATE_KEY (Base USDC) to run paid checks; TERENO_DRY_RUN=true works with no wallet.",
+    ].join("\n");
+    await callback?.({ text, actions: ["TERENO_PREVIEW"], source: message.content.source });
+    return { success: true, text };
+  },
+  examples: [],
+};
+
 export const terenoPlugin: Plugin = {
   name: "plugin-tereno",
+  // Anonymous init beacon (plugin_initializations). Never blocks startup.
+  init: async () => {
+    sendTelemetry({ event: "init" });
+  },
   description:
-    "Tereno for Base agents: buy bounded preflight verdicts and chain-data reads over x402 (budget-capped), and earn the agent's own safety budget by seeding work the network asks for — audited publishing, seeder dividends, portable reputation.",
+    "Pre-signature security layer for ElizaOS agents on Base: before an agent signs, buy a bounded verdict flagging unlimited approvals, suspicious contracts, unexpected balance changes and abnormal gas. Budget-capped (per-call + daily), fail-closed by default, standardized verdict, dry-run mode.",
   actions: [
+    // Security first: the pre-signature guard is the hero.
     checkTransaction, checkContract, contractChanged, tokenInfo, contractInterface, chainSnapshot,
-    bountiesAction, seedAction, standingAction, reportOutcomeAction, catalogAction,
+    // Free helpers.
+    previewAction, catalogAction,
+    // Advanced / how it stays cheap (cooperative loop).
+    bountiesAction, seedAction, standingAction, reportOutcomeAction,
   ],
 };
 
