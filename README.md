@@ -1,17 +1,25 @@
 <div align="center">
 
-# 🛡️ plugin-tereno
+<img src="images/logo.png" alt="Tereno" width="150" />
 
-### A pre-signature security layer for ElizaOS agents on Base
+# plugin-tereno
+
+### 🛡️ A pre-signature security layer for ElizaOS agents on Base
 
 **Before your agent signs, it checks.** One paid call flags unlimited approvals,
 suspicious contracts, unexpected balance changes and abnormal gas — and returns
 a single, standardized verdict your agent can branch on.
 
-[![npm version](https://img.shields.io/npm/v/plugin-tereno?style=flat-square&color=0052FF)](https://www.npmjs.com/package/plugin-tereno)
-[![ElizaOS](https://img.shields.io/badge/ElizaOS-%E2%89%A51.0-blueviolet?style=flat-square)](https://elizaos.ai)
-[![Base](https://img.shields.io/badge/Base-mainnet-0052FF?style=flat-square)](https://base.org)
-[![x402](https://img.shields.io/badge/payments-x402%20%2F%20USDC-2775CA?style=flat-square)](https://www.x402.org)
+<br/>
+
+[![npm version](https://img.shields.io/npm/v/plugin-tereno?style=for-the-badge&color=0052FF&logo=npm)](https://www.npmjs.com/package/plugin-tereno)
+[![ElizaOS](https://img.shields.io/badge/ElizaOS-%E2%89%A51.0-8B5CF6?style=for-the-badge)](https://elizaos.ai)
+[![Base](https://img.shields.io/badge/Base-0052FF?style=for-the-badge&logo=coinbase&logoColor=white)](https://base.org)
+[![x402](https://img.shields.io/badge/x402%20%C2%B7%20USDC-2775CA?style=for-the-badge)](https://www.x402.org)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/RobMartello/plugin-tereno/ci.yml?style=flat-square&label=CI)](https://github.com/RobMartello/plugin-tereno/actions)
+[![license](https://img.shields.io/npm/l/plugin-tereno?style=flat-square&color=green)](./LICENSE)
+[![fail-closed](https://img.shields.io/badge/default-fail--closed-critical?style=flat-square)](#fail-open-vs-fail-closed)
 
 ```bash
 bun add plugin-tereno
