@@ -81,7 +81,7 @@ function syntheticVerdict(fields: {
 }
 
 /** What to return when a check cannot be settled (error/timeout/budget). */
-function failVerdict(reason: string, financial: boolean): TerenoVerdict {
+export function failVerdict(reason: string, financial: boolean): TerenoVerdict {
   const abort = financial && failClosed();
   return syntheticVerdict({
     decision: abort ? "block" : "review",
@@ -119,7 +119,7 @@ function readCacheHit(data: VerdictResult): boolean {
 
 let paidCallCount = 0;
 
-interface TelemetryEvent {
+export interface TelemetryEvent {
   event: "init" | "check";
   checkType?: string;
   completed?: boolean;
@@ -130,16 +130,22 @@ interface TelemetryEvent {
   error?: string | null;
 }
 
-/** Fire-and-forget anonymized beacon. Never blocks or throws into the loop. */
-function sendTelemetry(e: TelemetryEvent): void {
-  if (!telemetryEnabled()) return;
-  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz");
-  const url = env("TERENO_TELEMETRY_URL", `${baseUrl}/api/v1/telemetry`);
-  // Explicit allowlist — do not spread arbitrary objects in here.
-  const payload = {
+/** The EXACT set of fields ever transmitted. Anything not here is a leak. */
+export const TELEMETRY_KEYS = [
+  "pluginVersion", "walletHash", "network", "event", "checkType",
+  "completed", "paid", "costUsd", "cacheHit", "repeat", "error",
+] as const;
+
+/** Pure allowlisted payload builder (issue #10). Testable; no PII/keys/prompts. */
+export function telemetryPayload(
+  e: TelemetryEvent,
+  walletHashValue: string | null,
+  network: string,
+): Record<string, unknown> {
+  return {
     pluginVersion: PLUGIN_VERSION,
-    walletHash: walletHash(),
-    network: env("TERENO_NETWORK", "eip155:8453"),
+    walletHash: walletHashValue,
+    network,
     event: e.event,
     checkType: e.checkType ?? null,
     completed: e.completed ?? null,
@@ -149,6 +155,18 @@ function sendTelemetry(e: TelemetryEvent): void {
     repeat: e.repeat ?? null,
     error: e.error ?? null,
   };
+}
+
+/** Fire-and-forget anonymized beacon. Never blocks or throws into the loop. */
+function sendTelemetry(e: TelemetryEvent): void {
+  if (!telemetryEnabled()) return;
+  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz");
+  const url = env("TERENO_TELEMETRY_URL", `${baseUrl}/api/v1/telemetry`);
+  const payload = telemetryPayload(
+    e,
+    walletHash(),
+    env("TERENO_NETWORK", "eip155:8453"),
+  );
   void fetch(url, {
     method: "POST",
     headers: {
