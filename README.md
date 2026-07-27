@@ -83,10 +83,10 @@ Your agent branches on one field: `recommendedAction`.
 |---|---:|---|
 | 🚦 `TERENO_CHECK_TRANSACTION` | $0.005 | **Is this safe to sign?** Simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags |
 | 🛡️ `TERENO_CHECK_CONTRACT` | $0.001–3 | Is this contract safe to interact with? (code, proxy, pause) |
-| 🕵️ `TERENO_CONTRACT_CHANGED` | $0.001 | Did it change since last look? (rug-pull-after-audit detector) |
-| 🪙 `TERENO_TOKEN_INFO` | $0.001 | What token is this, really? (name, symbol, decimals, supply) |
-| 🧬 `TERENO_CONTRACT_INTERFACE` | $0.001 | ERC-20? NFT? Proxy? One bounded probe |
-| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.001 | Latest Base block + gas, zero parameters |
+| 🕵️ `TERENO_CONTRACT_CHANGED` | $0.001–2 | Did it change since last look? (rug-pull-after-audit detector) |
+| 🪙 `TERENO_TOKEN_INFO` | $0.001–3 | What token is this, really? (name, symbol, decimals, supply) |
+| 🧬 `TERENO_CONTRACT_INTERFACE` | $0.001–2 | ERC-20? NFT? Proxy? One bounded probe |
+| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.001–2 | Latest Base block + gas, zero parameters |
 | 🧾 `TERENO_PREVIEW` | free | What the checks cover, cost and current config |
 | 📖 `TERENO_CATALOG` | free | Live catalog and prices |
 

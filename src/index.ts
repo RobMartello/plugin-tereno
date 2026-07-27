@@ -434,7 +434,7 @@ const tokenInfo = paidAction({
   name: "TERENO_TOKEN_INFO",
   similes: ["TOKEN_METADATA", "WHAT_TOKEN_IS_THIS", "TOKEN_LOOKUP"],
   description:
-    "Read a Base token's on-chain identity — name, symbol, decimals, total supply — via Tereno token.metadata ($0.001 USDC over x402). Use when the user asks what a token address is.",
+    "Read a Base token's on-chain identity — name, symbol, decimals, total supply — via Tereno token.metadata ($0.001–$0.003 USDC over x402 — you pay less when another agent already computed it). Use when the user asks what a token address is.",
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "token.metadata", address } : null;
@@ -446,7 +446,7 @@ const contractInterface = paidAction({
   name: "TERENO_CONTRACT_INTERFACE",
   similes: ["DETECT_CONTRACT_STANDARD", "IS_IT_ERC20", "IS_IT_NFT"],
   description:
-    "Detect which standard a Base contract implements — ERC-20, ERC-721, ERC-1155, ERC-165, EIP-1967 proxy — via Tereno contract.interface ($0.001 USDC over x402).",
+    "Detect which standard a Base contract implements — ERC-20, ERC-721, ERC-1155, ERC-165, EIP-1967 proxy — via Tereno contract.interface ($0.001–$0.002 USDC over x402 — you pay less when another agent already computed it).",
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "contract.interface", address } : null;
@@ -458,7 +458,7 @@ const contractChanged = paidAction({
   name: "TERENO_CONTRACT_CHANGED",
   similes: ["DID_CONTRACT_CHANGE", "RUG_PULL_CHECK", "PROXY_UPGRADE_CHECK"],
   description:
-    "Check whether a Base contract changed since Tereno last observed it — bytecode swap, proxy implementation/admin change, pause — via contract.change ($0.001 USDC over x402). The classic rug-pull-after-audit detector.",
+    "Check whether a Base contract changed since Tereno last observed it — bytecode swap, proxy implementation/admin change, pause — via contract.change ($0.001–$0.002 USDC over x402 — you pay less when another agent already computed it). The classic rug-pull-after-audit detector.",
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "contract.change", address } : null;
@@ -471,7 +471,7 @@ const chainSnapshot = paidAction({
   name: "TERENO_CHAIN_SNAPSHOT",
   similes: ["BASE_GAS_PRICE", "LATEST_BASE_BLOCK", "BASE_CHAIN_STATE"],
   description:
-    "Get the current Base chain state — latest block, timestamp, base fee and suggested gas fees — via Tereno chain.snapshot ($0.001 USDC over x402). No parameters needed.",
+    "Get the current Base chain state — latest block, timestamp, base fee and suggested gas fees — via Tereno chain.snapshot ($0.001–$0.002 USDC over x402 — you pay less when another agent already computed it). No parameters needed.",
   buildInput: () => ({ capabilityId: "chain.snapshot" }),
   missingInputText: "",
 });
@@ -598,7 +598,7 @@ const seedAction: Action = {
   name: "TERENO_SEED",
   similes: ["SEED_BOUNTY", "EARN_TERENO_CREDITS", "FULFIL_BOUNTY", "CONTRIBUTE_WORK"],
   description:
-    "Fulfil a Tereno bounty and claim the seeder slot. For contract.guard bounties the agent computes the bytecode fingerprint itself (free RPC work) and publishes it signed — audited by recomputation. For chain-data bounties it pays the $0.001 first settled invocation within budget. Seeders earn 20% of every settled cross-wallet reuse as credits that discount the guard capabilities. Use when asked to seed, contribute or earn credits; an explicit 0x address seeds that contract directly.",
+    "Fulfil a Tereno bounty and claim the seeder slot. For contract.guard bounties the agent computes the bytecode fingerprint itself (free RPC work) and publishes it signed — audited by recomputation. For chain-data bounties it pays the first settled invocation within budget ($0.002–$0.003, the cold-call price). Seeders earn 20% of every settled cross-wallet reuse as credits that discount the guard capabilities. Use when asked to seed, contribute or earn credits; an explicit 0x address seeds that contract directly.",
   validate: async (_runtime: IAgentRuntime, message: Memory) =>
     privateKey() !== null && sourceAllowed(message),
   handler: async (
@@ -625,16 +625,22 @@ const seedAction: Action = {
         bounty.fulfillment === "first_settled_invocation" && bounty.input.address &&
         (bounty.capabilityId === "token.metadata" || bounty.capabilityId === "contract.interface"));
       if (!payable) return respond("No fulfillable bounty is open right now.", false);
-      if (!underDailyBudget(0.001)) {
+      // A cold seed is a cache miss, and misses are priced above the $0.001
+      // settlement floor: token.metadata up to $0.003, contract.interface up to
+      // $0.002. Reserving the floor here would let a seed overrun the daily
+      // budget by up to 3x. Prefer the bounty's own quoted miss price when the
+      // API reports one.
+      const seedCostUsd = payable.seederEconomics?.lifetimeCapUsd ?? 0.003;
+      if (!underDailyBudget(seedCostUsd)) {
         return respond("Found a payable bounty, but the daily USDC budget is exhausted.", false);
       }
       const { data } = await client().invokeCapability<VerdictResult>({
         capabilityId: payable.capabilityId as "token.metadata" | "contract.interface",
         address: payable.input.address!,
       });
-      spentTodayUsd += data.pricing?.pricePaidUsd ?? 0.001;
+      spentTodayUsd += data.pricing?.pricePaidUsd ?? seedCostUsd;
       return respond(
-        `🌱 Paid $${data.pricing?.pricePaidUsd ?? 0.001} to seed ${payable.capabilityId} for ${payable.input.address}. As first settled payer I claimed the seeder slot: every settled reuse by another wallet now pays me $${payable.seederEconomics.dividendPerSettledReuseUsd} in credits (cap $${payable.seederEconomics.lifetimeCapUsd}).`,
+        `🌱 Paid $${data.pricing?.pricePaidUsd ?? seedCostUsd} to seed ${payable.capabilityId} for ${payable.input.address}. As first settled payer I claimed the seeder slot: every settled reuse by another wallet now pays me $${payable.seederEconomics.dividendPerSettledReuseUsd} in credits (cap $${payable.seederEconomics.lifetimeCapUsd}).`,
         true, data,
       );
     } catch (error) {
@@ -777,8 +783,8 @@ const previewAction: Action = {
       "🛡️ Tereno — pre-signature safety for Base agents. Coverage:",
       "• TERENO_CHECK_TRANSACTION ($0.005) — is this safe to sign? simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags",
       "• TERENO_CHECK_CONTRACT ($0.001–0.003) — is this contract safe to touch? code, proxy, pause",
-      "• TERENO_CONTRACT_CHANGED ($0.001) — did it change since last look? (rug-after-audit)",
-      "• TERENO_TOKEN_INFO / TERENO_CONTRACT_INTERFACE / TERENO_CHAIN_SNAPSHOT ($0.001) — reads",
+      "• TERENO_CONTRACT_CHANGED ($0.001–0.002) — did it change since last look? (rug-after-audit)",
+      "• TERENO_TOKEN_INFO ($0.001–0.003) / TERENO_CONTRACT_INTERFACE / TERENO_CHAIN_SNAPSHOT ($0.001–0.002) — reads, cheapest when shared",
       "Every verdict returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
       `Config: per-call cap $${maxPriceUsd()} · daily budget $${env("TERENO_DAILY_BUDGET_USD", "0.05")} · fail-${failClosed() ? "closed" : "open"}${dryRunEnabled() ? " · DRY-RUN (no payment)" : ""}`,
       configured ? "Wallet configured — paid checks are available." : "No wallet configured yet — set TERENO_PRIVATE_KEY (Base USDC) to run paid checks; TERENO_DRY_RUN=true works with no wallet.",
