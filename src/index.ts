@@ -21,6 +21,9 @@ import { base, baseSepolia } from "viem/chains";
 import { createTerenoClient, type CapabilityInput } from "tereno-client";
 
 const ADDRESS_RE = /0x[a-fA-F0-9]{40}/;
+const PUBLIC_URL_RE = /https?:\/\/[^\s<>\"\x27]+/i;
+const CAPABILITY_RE = /\b([a-z][a-z0-9]*(?:[._-][a-z0-9]+)+)\b/i;
+const ARTIFACT_ID_RE = /sha256:[a-f0-9]{64}/i;
 
 function env(name: string, fallback = ""): string {
   return process.env[name]?.trim() || fallback;
@@ -94,7 +97,7 @@ export function failVerdict(reason: string, financial: boolean): TerenoVerdict {
 // ————— Anonymous telemetry (issues #9/#10) —————
 // Opt-out (TERENO_TELEMETRY=off). STRICT allowlist below — this is the ONLY
 // data ever transmitted. Never the private key, prompt, secrets or tx content.
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.3.0";
 
 function telemetryEnabled(): boolean {
   return env("TERENO_TELEMETRY").toLowerCase() !== "off";
@@ -198,6 +201,14 @@ function client() {
 
 function firstAddress(message: Memory): string | null {
   return (message.content.text || "").match(ADDRESS_RE)?.[0] ?? null;
+}
+
+function firstPublicUrl(message: Memory): string | null {
+  return (message.content.text || "").match(PUBLIC_URL_RE)?.[0] ?? null;
+}
+
+function requestedCapability(message: Memory): string | null {
+  return (message.content.text || "").match(CAPABILITY_RE)?.[1]?.toLowerCase() ?? null;
 }
 
 // With TERENO_PRIVATE_ONLY=true, paid actions refuse public platform sources
@@ -335,7 +346,7 @@ function paidAction(config: {
     similes: config.similes,
     description: config.description,
     validate: async (_runtime: IAgentRuntime, message: Memory) =>
-      privateKey() !== null && sourceAllowed(message),
+      dryRunEnabled() || (privateKey() !== null && sourceAllowed(message)),
     handler: async (
       _runtime: IAgentRuntime,
       message: Memory,
@@ -501,6 +512,117 @@ const checkTransaction = paidAction({
     'To simulate before signing I need the unsigned transaction as JSON, e.g. {"from":"0x…","to":"0x…","data":"0x…","value":"0"}.',
   financial: true,
 });
+
+const evidenceArtifactAction: Action = {
+  name: "TERENO_VERIFY_EVIDENCE",
+  similes: ["VERIFY_TERENO_ARTIFACT", "CHECK_EVIDENCE_PROVENANCE", "RECOMPUTE_EVIDENCE"],
+  description: "Verify a public Tereno evidence artifact by its sha256 artifactId. Returns its provenance, validity and exact recomputation input; private transaction intent is rejected. Uses x402 within the configured budget.",
+  validate: async (_runtime, message) => dryRunEnabled() || (privateKey() !== null && sourceAllowed(message)),
+  handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
+    const artifactId = (message.content.text || "").match(ARTIFACT_ID_RE)?.[0] ?? null;
+    const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
+      await callback?.({ text, actions: ["TERENO_VERIFY_EVIDENCE"], source: message.content.source });
+      return { success, text, data: data as Record<string, unknown> | undefined };
+    };
+    if (!artifactId) return respond("I need a Tereno artifact id in the form sha256:<64 hex characters>.", false);
+    if (dryRunEnabled()) return respond("Dry-run: accepted " + artifactId + " for evidence verification; no x402 payment was made.", true, { artifactId, paidUsd: 0 });
+    if (!underDailyBudget(maxPriceUsd())) return respond("The daily USDC budget is exhausted; I did not verify the artifact.", false);
+    try {
+      const { data } = await client().invokeCapability<{ invocationId?: string; pricing?: { pricePaidUsd?: number }; receiptUrl?: string }>({ capabilityId: "evidence.artifact", artifactId });
+      const paid = data.pricing?.pricePaidUsd ?? maxPriceUsd();
+      spentTodayUsd += paid;
+      sendTelemetry({ event: "check", checkType: "evidence.artifact", completed: true, paid: true, costUsd: paid, repeat: paidCallCount > 0, error: null });
+      paidCallCount += 1;
+      return respond("Evidence verified. Paid: $" + paid + " USDC" + (data.receiptUrl ? "\\nReceipt: " + data.receiptUrl : ""), true, data);
+    } catch (error) {
+      return respond("Could not verify that evidence: " + (error instanceof Error ? error.message : String(error)), false);
+    }
+  },
+  examples: [],
+};
+
+const webCompileAction: Action = {
+  name: "TERENO_COMPILE_WEB_PAGE",
+  similes: ["URL_TO_MARKDOWN", "COMPILE_WEB_PAGE", "READ_WEB_PAGE_FOR_AGENT"],
+  description: "Turn one public URL into bounded, LLM-ready Markdown with resolved links, citations and a content-addressed Tereno artifact. Uses x402 only after a wallet-specific quote is within the configured cap ($0.005 fresh; $0.001 while fresh work is reusable).",
+  validate: async (_runtime, message) => dryRunEnabled() || (privateKey() !== null && sourceAllowed(message)),
+  handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
+    const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
+      await callback?.({ text, actions: ["TERENO_COMPILE_WEB_PAGE"], source: message.content.source });
+      return { success, text, data: data as Record<string, unknown> | undefined };
+    };
+    const url = firstPublicUrl(message);
+    if (!url) return respond("I need one public http(s) URL to compile into Markdown.", false);
+    if (dryRunEnabled()) return respond("Dry-run: accepted " + url + " for web.compile; no page was fetched and no x402 payment was made. Set TERENO_DRY_RUN=false to compile it.", true, { url, paidUsd: 0 });
+    if (!underDailyBudget(maxPriceUsd())) return respond("The daily USDC budget is exhausted; I did not compile the page.", false);
+    try {
+      const { data } = await client().compileWebPage<{ invocationId?: string; artifact?: { artifactId?: string; cacheStatus?: string; expiresAt?: string }; output?: { sourceUrl?: string; title?: string; contentHash?: string; links?: unknown[] }; pricing?: { pricePaidUsd?: number }; receiptUrl?: string }>(url);
+      const paid = data.pricing?.pricePaidUsd ?? maxPriceUsd();
+      spentTodayUsd += paid;
+      paidCallCount += 1;
+      sendTelemetry({ event: "check", checkType: "web.compile", completed: true, paid: true, costUsd: paid, cacheHit: data.artifact?.cacheStatus === "hit", repeat: paidCallCount > 1, error: null });
+      const lines = [
+        "Compiled: " + (data.output?.title || data.output?.sourceUrl || url),
+        "Paid: $" + paid + " USDC · cache " + (data.artifact?.cacheStatus || "unknown"),
+        data.artifact?.artifactId ? "Artifact: " + data.artifact.artifactId : null,
+        data.artifact?.expiresAt ? "Fresh until: " + data.artifact.expiresAt : null,
+        data.receiptUrl ? "Receipt: " + data.receiptUrl : null,
+      ].filter(Boolean).join("\\n");
+      return respond(lines, true, data);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      sendTelemetry({ event: "check", checkType: "web.compile", completed: false, paid: false, error: "integration_error" });
+      return respond("Could not compile that page: " + reason, false);
+    }
+  },
+  examples: [],
+};
+
+const opportunitiesAction: Action = {
+  name: "TERENO_OPPORTUNITIES",
+  similes: ["TERENO_MARKET_DEMAND", "WHAT_AGENTS_NEED", "LIST_AGENT_OPPORTUNITIES"],
+  description: "List aggregate unknown asks and conditional pledges observed by Tereno. This is research evidence, not traction or a guaranteed reward. Free and wallet-free.",
+  validate: async () => true,
+  handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
+    try {
+      const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz");
+      const response = await fetch(baseUrl + "/api/v1/opportunities?limit=20", { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+      const data = await response.json() as { opportunities?: Array<{ requestedCapability: string; unknownCapabilityRequests: number; unknownMcpToolCalls: number; pledgeWallets: number; fulfilledPledges: number; signal: string }> };
+      if (!response.ok) throw new Error("Tereno opportunities unavailable");
+      const rows = data.opportunities ?? [];
+      const text = rows.length ? "Tereno opportunity signals (not PMF proof):\\n" + rows.map((item) => "- " + item.requestedCapability + ": " + (item.unknownCapabilityRequests + item.unknownMcpToolCalls) + " observed ask(s), " + item.pledgeWallets + " pledge wallet(s), " + item.fulfilledPledges + " paid proof (" + item.signal + ")").join("\\n") : "No aggregate opportunity signals yet.";
+      await callback?.({ text, actions: ["TERENO_OPPORTUNITIES"], source: message.content.source });
+      return { success: true, text, data };
+    } catch (error) {
+      const text = "Could not read Tereno opportunities: " + (error instanceof Error ? error.message : String(error));
+      await callback?.({ text, actions: ["TERENO_OPPORTUNITIES"], source: message.content.source });
+      return { success: false, text };
+    }
+  },
+  examples: [],
+};
+
+const pledgeDemandAction: Action = {
+  name: "TERENO_PLEDGE_DEMAND",
+  similes: ["PLEDGE_TERENO_DEMAND", "I_WOULD_BUY_CAPABILITY", "DECLARE_CAPABILITY_DEMAND"],
+  description: "Explicitly declare that this agent would pay for a named future capability, for example wallet-scam-classification. Free. It earns no credit now; only a later paid settlement by this same wallet can release a bounded non-transferable credit.",
+  validate: async (_runtime, message) => privateKey() !== null && sourceAllowed(message),
+  handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
+    const capability = requestedCapability(message);
+    const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
+      await callback?.({ text, actions: ["TERENO_PLEDGE_DEMAND"], source: message.content.source });
+      return { success, text, data: data as Record<string, unknown> | undefined };
+    };
+    if (!capability) return respond("Name the capability explicitly, for example: pledge demand for wallet-scam-classification.", false);
+    try {
+      const pledge = await client().pledgeDemand(capability);
+      return respond("Pledged demand for " + pledge.capability + ". No credit was issued now; a bounded non-transferable credit is released only if this same wallet later settles that exact capability.", true, pledge);
+    } catch (error) {
+      return respond("Could not record the demand pledge: " + (error instanceof Error ? error.message : String(error)), false);
+    }
+  },
+  examples: [],
+};
 
 // ————— Cooperative loop: the agent earns its own safety budget —————
 // First settled payer (or audited publisher) of fresh work becomes its seeder
@@ -785,6 +907,9 @@ const previewAction: Action = {
       "• TERENO_CHECK_CONTRACT ($0.001–0.003) — is this contract safe to touch? code, proxy, pause",
       "• TERENO_CONTRACT_CHANGED ($0.001–0.002) — did it change since last look? (rug-after-audit)",
       "• TERENO_TOKEN_INFO ($0.001–0.003) / TERENO_CONTRACT_INTERFACE / TERENO_CHAIN_SNAPSHOT ($0.001–0.002) — reads, cheapest when shared",
+      "• TERENO_COMPILE_WEB_PAGE ($0.005 fresh / $0.001 reuse) — cited, reusable Markdown from one public URL",
+      "• TERENO_VERIFY_EVIDENCE ($0.001–0.003) — provenance and recomputation input for a public artifact",
+      "• TERENO_OPPORTUNITIES (free) / TERENO_PLEDGE_DEMAND (free, explicit) — observed demand, never PMF proof",
       "Every verdict returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
       `Config: per-call cap $${maxPriceUsd()} · daily budget $${env("TERENO_DAILY_BUDGET_USD", "0.05")} · fail-${failClosed() ? "closed" : "open"}${dryRunEnabled() ? " · DRY-RUN (no payment)" : ""}`,
       configured ? "Wallet configured — paid checks are available." : "No wallet configured yet — set TERENO_PRIVATE_KEY (Base USDC) to run paid checks; TERENO_DRY_RUN=true works with no wallet.",
@@ -805,9 +930,9 @@ export const terenoPlugin: Plugin = {
     "Pre-signature security layer for ElizaOS agents on Base: before an agent signs, buy a bounded verdict flagging unlimited approvals, suspicious contracts, unexpected balance changes and abnormal gas. Budget-capped (per-call + daily), fail-closed by default, standardized verdict, dry-run mode.",
   actions: [
     // Security first: the pre-signature guard is the hero.
-    checkTransaction, checkContract, contractChanged, tokenInfo, contractInterface, chainSnapshot,
+    checkTransaction, checkContract, contractChanged, tokenInfo, contractInterface, chainSnapshot, evidenceArtifactAction, webCompileAction,
     // Free helpers.
-    previewAction, catalogAction,
+    previewAction, catalogAction, opportunitiesAction, pledgeDemandAction,
     // Advanced / how it stays cheap (cooperative loop).
     bountiesAction, seedAction, standingAction, reportOutcomeAction,
   ],

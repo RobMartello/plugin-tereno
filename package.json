@@ -1,6 +1,6 @@
 {
   "name": "plugin-tereno",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Pre-signature security layer for ElizaOS agents on Base: buy a bounded verdict (unlimited-approval, drainer, suspicious-contract, balance/gas anomaly) before signing. Budget-capped, fail-closed, standardized verdict, dry-run.",
   "type": "module",
   "main": "./dist/index.js",
@@ -30,7 +30,12 @@
     "base",
     "usdc",
     "tereno",
-    "agent"
+    "agent",
+    "web-to-markdown",
+    "web-scraping",
+    "agent-research",
+    "evidence",
+    "bazaar"
   ],
   "repository": {
     "type": "git",
@@ -74,7 +79,7 @@
     }
   },
   "dependencies": {
-    "tereno-client": "^0.1.0"
+    "tereno-client": "^0.2.0"
   },
   "peerDependencies": {
     "@elizaos/core": ">=1.0.0",

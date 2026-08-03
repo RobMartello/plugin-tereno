@@ -4,6 +4,7 @@ import {
   failVerdict,
   telemetryPayload,
   TELEMETRY_KEYS,
+  terenoPlugin,
 } from "./index.ts";
 
 const COST = { capUsd: 0.005, dailySpentUsd: 0.01 };
@@ -115,5 +116,25 @@ describe("telemetryPayload (privacy allowlist)", () => {
   test("carries the plugin version for attribution", () => {
     const p = telemetryPayload({ event: "init" }, null, "eip155:8453");
     expect(typeof p.pluginVersion).toBe("string");
+  });
+});
+
+
+describe("plugin surface", () => {
+  test("exposes the current research and demand actions", () => {
+    const names = (terenoPlugin.actions ?? []).map((action) => action.name);
+    expect(names).toContain("TERENO_COMPILE_WEB_PAGE");
+    expect(names).toContain("TERENO_VERIFY_EVIDENCE");
+    expect(names).toContain("TERENO_OPPORTUNITIES");
+    expect(names).toContain("TERENO_PLEDGE_DEMAND");
+  });
+
+  test("dry-run makes a paid action available without a wallet", async () => {
+    process.env.TERENO_DRY_RUN = "true";
+    delete process.env.TERENO_PRIVATE_KEY;
+    delete process.env.EVM_PRIVATE_KEY;
+    const action = (terenoPlugin.actions ?? []).find((item) => item.name === "TERENO_CHECK_TRANSACTION");
+    expect(action).toBeDefined();
+    await expect(action!.validate!({} as never, { content: { text: "{}", source: "discord" } } as never)).resolves.toBe(true);
   });
 });

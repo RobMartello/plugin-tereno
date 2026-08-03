@@ -87,6 +87,10 @@ Your agent branches on one field: `recommendedAction`.
 | 🪙 `TERENO_TOKEN_INFO` | $0.001–3 | What token is this, really? (name, symbol, decimals, supply) |
 | 🧬 `TERENO_CONTRACT_INTERFACE` | $0.001–2 | ERC-20? NFT? Proxy? One bounded probe |
 | ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.001–2 | Latest Base block + gas, zero parameters |
+| 📄 `TERENO_COMPILE_WEB_PAGE` | $0.001–5 | Public URL → bounded Markdown, resolved links, citations and reusable artifact |
+| 🔎 `TERENO_VERIFY_EVIDENCE` | $0.001–3 | Verify a public artifact, validity and recomputation input |
+| 📈 `TERENO_OPPORTUNITIES` | free | Aggregate unmet agent asks — research signal, not traction |
+| 🤝 `TERENO_PLEDGE_DEMAND` | free | Explicit intent to buy a named future capability; credit only after same-wallet paid proof |
 | 🧾 `TERENO_PREVIEW` | free | What the checks cover, cost and current config |
 | 📖 `TERENO_CATALOG` | free | Live catalog and prices |
 
@@ -167,6 +171,17 @@ was paid, its USD cost, cache-hit, a repeat flag, and an integration-error flag.
 Nothing else. See [`SECURITY.md`](./SECURITY.md).
 
 ---
+
+## 📄 Research and demand signals
+
+The plugin also gives a research agent a safe way to use the Tereno network without changing the pre-signature default:
+
+- **TERENO_COMPILE_WEB_PAGE** turns one public URL into bounded Markdown with resolved links, citations and a content-addressed artifact. It is $0.005 for a fresh compile and $0.001 while the same page remains fresh.
+- **TERENO_VERIFY_EVIDENCE** checks the provenance and recomputation input of a public artifact. It never exposes private transaction intent.
+- **TERENO_OPPORTUNITIES** shows aggregate unmet asks. It is explicitly a research signal, not a reward pool or proof of demand.
+- **TERENO_PLEDGE_DEMAND** is available only after an explicit request and a configured wallet. A pledge earns nothing at submission; only a later settlement by that same wallet can release a bounded, non-transferable credit.
+
+TERENO_DRY_RUN=true accepts both safety and research inputs without a wallet, fetch or x402 payment, so an ElizaOS builder can verify action selection before enabling spend.
 
 ## 🌱 How it stays cheap — the cooperative layer (advanced)
 

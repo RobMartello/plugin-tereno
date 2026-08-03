@@ -29,6 +29,9 @@ Sentinel: (TERENO_PREVIEW) coverage + current config — free
 
 you:      is it safe to sign {"from":"0x…","to":"0x…","data":"0x095ea7b3…"}?
 Sentinel: (TERENO_CHECK_TRANSACTION) 🧪 dry-run verdict — no USDC spent
+
+you:      compile https://example.com/article into Markdown
+Sentinel: (TERENO_COMPILE_WEB_PAGE) 🧪 input accepted — no fetch or USDC spent
 ```
 
 ## Going live
