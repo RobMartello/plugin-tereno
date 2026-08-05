@@ -29,6 +29,27 @@ bun add plugin-tereno
 
 ---
 
+## 📦 What gets installed
+
+One command is enough:
+
+```bash
+bun add plugin-tereno
+```
+
+You **do not** need to install **tereno-client** separately. Your package manager installs it automatically as a dependency of this plugin.
+
+```text
+Your ElizaOS project
+  └─ plugin-tereno       installed locally: ElizaOS actions, budgets, fail-closed policy and dry-run
+       └─ tereno-client  installed automatically: quote, x402 payment and receipt client
+            └─ Tereno API (https://www.tereno.xyz)  hosted: capabilities, artifacts, cache and opportunity aggregation
+```
+
+The Tereno backend, databases, caches, internal routes and secrets are **not** downloaded into your project. The plugin only calls the hosted API. A Base wallet signs x402 payments locally, and only when you turn off dry-run and the quoted price is within your configured budget.
+
+**Which package should I use?** Install **plugin-tereno** for an ElizaOS agent. Install **tereno-client** directly only if you are building for another runtime and want the lower-level x402 client.
+
 ## ⚡ Why this exists
 
 Autonomous agents sign transactions with no instinct for danger. One malicious
@@ -88,7 +109,7 @@ Your agent branches on one field: `recommendedAction`.
 | 🧬 `TERENO_CONTRACT_INTERFACE` | $0.001–2 | ERC-20? NFT? Proxy? One bounded probe |
 | ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.001–2 | Latest Base block + gas, zero parameters |
 | 📄 `TERENO_COMPILE_WEB_PAGE` | $0.001–5 | Public URL → bounded Markdown, resolved links, citations and reusable artifact |
-| 🔎 `TERENO_VERIFY_EVIDENCE` | $0.001–3 | Verify a public artifact, validity and recomputation input |
+| 🔎 `TERENO_VERIFY_EVIDENCE` | free | Read a public artifact reference, validity and recomputation input |
 | 📈 `TERENO_OPPORTUNITIES` | free | Aggregate unmet agent asks — research signal, not traction |
 | 🤝 `TERENO_PLEDGE_DEMAND` | free | Explicit intent to buy a named future capability; credit only after same-wallet paid proof |
 | 🧾 `TERENO_PREVIEW` | free | What the checks cover, cost and current config |
@@ -148,6 +169,7 @@ Then just talk to your agent:
 | `TERENO_API_URL` | `https://www.tereno.xyz` | API origin. |
 | `TERENO_RPC_URL` | `https://mainnet.base.org` | RPC for local fingerprint work. |
 | `TERENO_TELEMETRY` | `on` | `off` → send no anonymous usage telemetry. |
+| `TERENO_EVIDENCE_INSTALLATION_ID` | — | Optional stable random id for this installation. It is hashed only when the agent resolves evidence received from another agent; never use a wallet or secret. |
 
 ### Fail-open vs fail-closed
 
@@ -177,7 +199,7 @@ Nothing else. See [`SECURITY.md`](./SECURITY.md).
 The plugin also gives a research agent a safe way to use the Tereno network without changing the pre-signature default:
 
 - **TERENO_COMPILE_WEB_PAGE** turns one public URL into bounded Markdown with resolved links, citations and a content-addressed artifact. It is $0.005 for a fresh compile and $0.001 while the same page remains fresh.
-- **TERENO_VERIFY_EVIDENCE** checks the provenance and recomputation input of a public artifact. It never exposes private transaction intent.
+- **TERENO_VERIFY_EVIDENCE** reads the free provenance and recomputation reference of a public artifact. It never exposes private transaction intent, paid output or payer identity. Set `TERENO_EVIDENCE_INSTALLATION_ID` to a stable random value if you want this installation to count once per artifact/day in the circulation experiment.
 - **TERENO_OPPORTUNITIES** shows aggregate unmet asks. It is explicitly a research signal, not a reward pool or proof of demand.
 - **TERENO_PLEDGE_DEMAND** is available only after an explicit request and a configured wallet. A pledge earns nothing at submission; only a later settlement by that same wallet can release a bounded, non-transferable credit.
 

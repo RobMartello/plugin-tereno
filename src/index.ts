@@ -67,6 +67,22 @@ function dryRunEnabled(): boolean {
   return env("TERENO_DRY_RUN").toLowerCase() === "true";
 }
 
+/** Free public evidence references intentionally do not require an x402 wallet.
+ * The optional installation id is opaque, persisted by the operator and hashed
+ * server-side solely for the circulation experiment. */
+async function readEvidenceReference(artifactId: string) {
+  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz").replace(/\/+$/, "");
+  const headers: Record<string, string> = { accept: "application/json" };
+  const installationId = env("TERENO_EVIDENCE_INSTALLATION_ID");
+  if (installationId) headers["x-tereno-evidence-installation"] = installationId;
+  const response = await fetch(`${baseUrl}/api/v1/evidence/${encodeURIComponent(artifactId)}?channel=plugin-tereno`, {
+    headers, signal: AbortSignal.timeout(10_000),
+  });
+  const body = await response.json() as Record<string, unknown>;
+  if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `Evidence reference failed (${response.status})`);
+  return body;
+}
+
 /** A synthetic verdict for dry-run / fail-mode paths (no on-chain settlement). */
 function syntheticVerdict(fields: {
   decision: Decision;
@@ -97,7 +113,7 @@ export function failVerdict(reason: string, financial: boolean): TerenoVerdict {
 // ————— Anonymous telemetry (issues #9/#10) —————
 // Opt-out (TERENO_TELEMETRY=off). STRICT allowlist below — this is the ONLY
 // data ever transmitted. Never the private key, prompt, secrets or tx content.
-const PLUGIN_VERSION = "0.3.0";
+const PLUGIN_VERSION = "0.3.1";
 
 function telemetryEnabled(): boolean {
   return env("TERENO_TELEMETRY").toLowerCase() !== "off";
@@ -516,8 +532,8 @@ const checkTransaction = paidAction({
 const evidenceArtifactAction: Action = {
   name: "TERENO_VERIFY_EVIDENCE",
   similes: ["VERIFY_TERENO_ARTIFACT", "CHECK_EVIDENCE_PROVENANCE", "RECOMPUTE_EVIDENCE"],
-  description: "Verify a public Tereno evidence artifact by its sha256 artifactId. Returns its provenance, validity and exact recomputation input; private transaction intent is rejected. Uses x402 within the configured budget.",
-  validate: async (_runtime, message) => dryRunEnabled() || (privateKey() !== null && sourceAllowed(message)),
+  description: "Read a public Tereno evidence reference by sha256 artifactId. Free: returns provenance, validity and exact recomputation input without exposing paid output or payer identity. Private transaction intent is rejected.",
+  validate: async () => true,
   handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
     const artifactId = (message.content.text || "").match(ARTIFACT_ID_RE)?.[0] ?? null;
     const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
@@ -525,15 +541,16 @@ const evidenceArtifactAction: Action = {
       return { success, text, data: data as Record<string, unknown> | undefined };
     };
     if (!artifactId) return respond("I need a Tereno artifact id in the form sha256:<64 hex characters>.", false);
-    if (dryRunEnabled()) return respond("Dry-run: accepted " + artifactId + " for evidence verification; no x402 payment was made.", true, { artifactId, paidUsd: 0 });
-    if (!underDailyBudget(maxPriceUsd())) return respond("The daily USDC budget is exhausted; I did not verify the artifact.", false);
     try {
-      const { data } = await client().invokeCapability<{ invocationId?: string; pricing?: { pricePaidUsd?: number }; receiptUrl?: string }>({ capabilityId: "evidence.artifact", artifactId });
-      const paid = data.pricing?.pricePaidUsd ?? maxPriceUsd();
-      spentTodayUsd += paid;
-      sendTelemetry({ event: "check", checkType: "evidence.artifact", completed: true, paid: true, costUsd: paid, repeat: paidCallCount > 0, error: null });
-      paidCallCount += 1;
-      return respond("Evidence verified. Paid: $" + paid + " USDC" + (data.receiptUrl ? "\\nReceipt: " + data.receiptUrl : ""), true, data);
+      const data = await readEvidenceReference(artifactId) as {
+        provenance?: { validUntil?: string }; verification?: { href?: string }; observation?: { recorded?: boolean };
+      };
+      return respond([
+        "Evidence reference resolved. Free — no x402 payment.",
+        data.provenance?.validUntil ? "Valid until: " + data.provenance.validUntil : null,
+        data.verification?.href ? "Verify: " + data.verification.href : null,
+        data.observation?.recorded ? "Cross-agent reference observation recorded." : null,
+      ].filter(Boolean).join("\\n"), true, data);
     } catch (error) {
       return respond("Could not verify that evidence: " + (error instanceof Error ? error.message : String(error)), false);
     }
@@ -908,7 +925,7 @@ const previewAction: Action = {
       "• TERENO_CONTRACT_CHANGED ($0.001–0.002) — did it change since last look? (rug-after-audit)",
       "• TERENO_TOKEN_INFO ($0.001–0.003) / TERENO_CONTRACT_INTERFACE / TERENO_CHAIN_SNAPSHOT ($0.001–0.002) — reads, cheapest when shared",
       "• TERENO_COMPILE_WEB_PAGE ($0.005 fresh / $0.001 reuse) — cited, reusable Markdown from one public URL",
-      "• TERENO_VERIFY_EVIDENCE ($0.001–0.003) — provenance and recomputation input for a public artifact",
+      "• TERENO_VERIFY_EVIDENCE (free) — provenance and recomputation input for a public artifact",
       "• TERENO_OPPORTUNITIES (free) / TERENO_PLEDGE_DEMAND (free, explicit) — observed demand, never PMF proof",
       "Every verdict returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
       `Config: per-call cap $${maxPriceUsd()} · daily budget $${env("TERENO_DAILY_BUDGET_USD", "0.05")} · fail-${failClosed() ? "closed" : "open"}${dryRunEnabled() ? " · DRY-RUN (no payment)" : ""}`,

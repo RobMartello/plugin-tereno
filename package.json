@@ -1,6 +1,6 @@
 {
   "name": "plugin-tereno",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Pre-signature security layer for ElizaOS agents on Base: buy a bounded verdict (unlimited-approval, drainer, suspicious-contract, balance/gas anomaly) before signing. Budget-capped, fail-closed, standardized verdict, dry-run.",
   "type": "module",
   "main": "./dist/index.js",
@@ -75,6 +75,10 @@
       "TERENO_TELEMETRY": {
         "type": "string",
         "description": "Set to off to disable anonymous, allowlisted usage telemetry (hashed wallet only; never keys/prompts)."
+      },
+      "TERENO_EVIDENCE_INSTALLATION_ID": {
+        "type": "string",
+        "description": "Optional stable random identifier for this agent installation. It is SHA-256 hashed only when resolving evidence received from another agent; never use a wallet or secret."
       }
     }
   },
