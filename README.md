@@ -102,18 +102,27 @@ Your agent branches on one field: `recommendedAction`.
 
 | Action | Price | The question it answers |
 |---|---:|---|
-| 🚦 `TERENO_CHECK_TRANSACTION` | $0.005 | **Is this safe to sign?** Simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags |
-| 🛡️ `TERENO_CHECK_CONTRACT` | $0.001–3 | Is this contract safe to interact with? (code, proxy, pause) |
-| 🕵️ `TERENO_CONTRACT_CHANGED` | $0.001–2 | Did it change since last look? (rug-pull-after-audit detector) |
-| 🪙 `TERENO_TOKEN_INFO` | $0.001–3 | What token is this, really? (name, symbol, decimals, supply) |
-| 🧬 `TERENO_CONTRACT_INTERFACE` | $0.001–2 | ERC-20? NFT? Proxy? One bounded probe |
-| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.001–2 | Latest Base block + gas, zero parameters |
-| 📄 `TERENO_COMPILE_WEB_PAGE` | $0.001–5 | Public URL → bounded Markdown, resolved links, citations and reusable artifact |
+| 🚦 `TERENO_CHECK_TRANSACTION` | $0.05 | **Is this safe to sign?** Simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags |
+| 🔁 `TERENO_CHECK_SWAP` | $0.05 | Will this prepared Aerodrome swap still satisfy its own encoded limit? |
+| 🛡️ `TERENO_CHECK_CONTRACT` | $0.01–0.03 | Is this contract safe to interact with? (code, proxy, pause) |
+| 🕵️ `TERENO_CONTRACT_CHANGED` | $0.01–0.02 | Did it change since last look? (rug-pull-after-audit detector) |
+| 🪙 `TERENO_TOKEN_INFO` | $0.01–0.03 | What token is this, really? (name, symbol, decimals, supply) |
+| 🧬 `TERENO_CONTRACT_INTERFACE` | $0.01–0.02 | ERC-20? NFT? Proxy? One bounded probe |
+| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.002–0.005 | Latest Base block + gas, zero parameters |
+| 📄 `TERENO_COMPILE_WEB_PAGE` | $0.02–0.03 | Public URL → bounded Markdown, resolved links, citations and reusable artifact |
+| 🔬 `TERENO_CHECK_X402_ENDPOINT` | $0.03 | Is another x402 endpoint callable, well-formed and unchanged since last look? |
+| ⚖️ `TERENO_OBLIGATION_VERDICT` | $0.001 | Was a published economic condition satisfied? |
 | 🔎 `TERENO_VERIFY_EVIDENCE` | free | Read a public artifact reference, validity and recomputation input |
 | 📈 `TERENO_OPPORTUNITIES` | free | Aggregate unmet agent asks — research signal, not traction |
 | 🤝 `TERENO_PLEDGE_DEMAND` | free | Explicit intent to buy a named future capability; credit only after same-wallet paid proof |
 | 🧾 `TERENO_PREVIEW` | free | What the checks cover, cost and current config |
 | 📖 `TERENO_CATALOG` | free | Live catalog and prices |
+
+> Prices are asserted against the live network by `bun test`, not maintained by
+> hand. They live in one table (`CAPABILITY_PRICE_USD` in `src/index.ts`); if the
+> network changes a price and this table does not, CI fails. Before 0.4.0 this
+> table did not exist and the advertised prices drifted 10× behind the network,
+> which put every paid check above the plugin's own per-call cap.
 
 ## 🚀 Quickstart (free, no wallet needed)
 
@@ -140,8 +149,8 @@ A complete runnable agent lives in [`examples/eliza-base-agent`](./examples/eliz
 ```bash
 TERENO_DRY_RUN=false
 TERENO_PRIVATE_KEY=0x…        # a dedicated hot wallet with a little USDC on Base
-TERENO_MAX_PRICE_USD=0.005    # per-call cap
-TERENO_DAILY_BUDGET_USD=0.05  # rolling daily cap
+TERENO_MAX_PRICE_USD=0.05     # per-call cap (must cover the dearest check)
+TERENO_DAILY_BUDGET_USD=0.5   # rolling daily cap
 TERENO_FAIL_MODE=closed       # financial checks abort if the guard can't answer
 ```
 
@@ -153,15 +162,15 @@ TERENO_FAIL_MODE=closed       # financial checks abort if the guard can't answer
 Then just talk to your agent:
 
 > **you:** is it safe to sign this? `{"from":"0x…","to":"0x…","data":"0x095ea7b3…"}`
-> **agent:** ⛔ BLOCK · risk high · → abort — UNLIMITED_ALLOWANCE: the spender gets max approval. Paid $0.005 · receipt attached.
+> **agent:** ⛔ BLOCK · risk high · → abort — UNLIMITED_ALLOWANCE: the spender gets max approval. Paid $0.05 · receipt attached.
 
 ## ⚙️ Configuration
 
 | Env | Default | Purpose |
 |---|---|---|
 | `TERENO_PRIVATE_KEY` | — | Wallet that pays x402 (USDC on Base). Falls back to `EVM_PRIVATE_KEY`. |
-| `TERENO_MAX_PRICE_USD` | `0.005` | Per-call USDC cap. |
-| `TERENO_DAILY_BUDGET_USD` | `0.05` | Rolling daily USDC budget. |
+| `TERENO_MAX_PRICE_USD` | `0.05` | Per-call USDC cap. Set below the dearest check and those calls are refused before payment, returning `guard unavailable`; `TERENO_PREVIEW` warns when that is the case. |
+| `TERENO_DAILY_BUDGET_USD` | `0.5` | Rolling daily USDC budget. |
 | `TERENO_FAIL_MODE` | `closed` | `closed` → financial checks abort on failure; `open` → degrade to review. |
 | `TERENO_DRY_RUN` | `false` | `true` → no payment, simulated verdict. |
 | `TERENO_PRIVATE_ONLY` | `false` | `true` → refuse paid actions from public Discord/Telegram/Twitter. |
@@ -198,7 +207,7 @@ Nothing else. See [`SECURITY.md`](./SECURITY.md).
 
 The plugin also gives a research agent a safe way to use the Tereno network without changing the pre-signature default:
 
-- **TERENO_COMPILE_WEB_PAGE** turns one public URL into bounded Markdown with resolved links, citations and a content-addressed artifact. It is $0.005 for a fresh compile and $0.001 while the same page remains fresh.
+- **TERENO_COMPILE_WEB_PAGE** turns one public URL into bounded Markdown with resolved links, citations and a content-addressed artifact. It is $0.03 for a fresh compile and $0.02 while the same page remains fresh.
 - **TERENO_VERIFY_EVIDENCE** reads the free provenance and recomputation reference of a public artifact. It never exposes private transaction intent, paid output or payer identity. Set `TERENO_EVIDENCE_INSTALLATION_ID` to a stable random value if you want this installation to count once per artifact/day in the circulation experiment.
 - **TERENO_OPPORTUNITIES** shows aggregate unmet asks. It is explicitly a research signal, not a reward pool or proof of demand.
 - **TERENO_PLEDGE_DEMAND** is available only after an explicit request and a configured wallet. A pledge earns nothing at submission; only a later settlement by that same wallet can release a bounded, non-transferable credit.
@@ -224,7 +233,7 @@ checks above:
 | Action | Cost | What it does |
 |---|---:|---|
 | `TERENO_BOUNTIES` | free | See the work the network will pay to have seeded next |
-| `TERENO_SEED` | free/$0.001 | Seed a bounty (publish a signed fingerprint, or be first payer) |
+| `TERENO_SEED` | free/$0.02–0.03 | Seed a bounty (publish a signed fingerprint for free, or pay to be first payer) |
 | `TERENO_STANDING` | free | The agent's audited track record and earned credits |
 | `TERENO_REPORT_OUTCOME` | free | Attach a signed outcome to a settled verdict |
 

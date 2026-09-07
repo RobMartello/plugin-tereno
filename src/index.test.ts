@@ -5,6 +5,12 @@ import {
   telemetryPayload,
   TELEMETRY_KEYS,
   terenoPlugin,
+  CAPABILITY_PRICE_USD,
+  ASSURANCE_PRICE_USD,
+  DEFAULT_MAX_PRICE_USD,
+  DEFAULT_DAILY_BUDGET_USD,
+  dearestCapabilityUsd,
+  priceLabel,
 } from "./index.ts";
 
 const COST = { capUsd: 0.005, dailySpentUsd: 0.01 };
@@ -136,5 +142,117 @@ describe("plugin surface", () => {
     const action = (terenoPlugin.actions ?? []).find((item) => item.name === "TERENO_CHECK_TRANSACTION");
     expect(action).toBeDefined();
     await expect(action!.validate!({} as never, { content: { text: "{}", source: "discord" } } as never)).resolves.toBe(true);
+  });
+});
+
+// ————— Price drift (the defect that shipped twice) —————
+//
+// 0.3.1 advertised $0.001-0.003 for calls the network charged $0.01-0.03 for,
+// and its own per-call cap then refused every one of them. It compiled, all 14
+// tests passed, and the plugin could not buy anything. Nothing in this file
+// looked at the live catalog, so nothing could tell.
+//
+// These tests read the network. When the network is unreachable they skip with
+// a message rather than fail, so working offline stays possible; CI has network,
+// which is where the gate has to hold.
+
+const CATALOG_URL =
+  (process.env.TERENO_API_URL?.trim() || "https://www.tereno.xyz") + "/api/v1/capabilities";
+
+interface LiveCatalog {
+  capabilities: {
+    id: string;
+    pricing: { cacheHitUsd: number; cacheMissUsd: number };
+  }[];
+}
+
+async function liveCatalog(): Promise<LiveCatalog | null> {
+  try {
+    const response = await fetch(CATALOG_URL, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as LiveCatalog;
+  } catch {
+    return null;
+  }
+}
+
+describe("advertised prices match the live network", () => {
+  test("every price this plugin quotes is the price the network charges", async () => {
+    const catalog = await liveCatalog();
+    if (!catalog) {
+      console.warn(`[skip] ${CATALOG_URL} unreachable; price drift not checked`);
+      return;
+    }
+    const live = new Map(catalog.capabilities.map((item) => [item.id, item.pricing]));
+    const drift: string[] = [];
+    for (const [id, advertised] of Object.entries(CAPABILITY_PRICE_USD)) {
+      const actual = live.get(id);
+      if (!actual) {
+        drift.push(`${id}: advertised by this plugin but absent from the catalog`);
+        continue;
+      }
+      if (advertised.hit !== actual.cacheHitUsd || advertised.miss !== actual.cacheMissUsd) {
+        drift.push(
+          `${id}: plugin says $${advertised.hit}-${advertised.miss}, network charges ` +
+            `$${actual.cacheHitUsd}-${actual.cacheMissUsd}`,
+        );
+      }
+    }
+    expect(drift).toEqual([]);
+  });
+
+  test("the assurance front still lists at the advertised price", async () => {
+    const baseUrl = process.env.TERENO_API_URL?.trim() || "https://www.tereno.xyz";
+    let listed: number | null = null;
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/x402/assurance`, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (response.ok) {
+        const body = (await response.json()) as { pricing?: { pricePerReportUsd?: number } };
+        listed = body.pricing?.pricePerReportUsd ?? null;
+      }
+    } catch {
+      listed = null;
+    }
+    if (listed === null) {
+      console.warn("[skip] assurance document unreachable; price not checked");
+      return;
+    }
+    expect(listed).toBe(ASSURANCE_PRICE_USD);
+  });
+
+  test("a capability the network sells is not silently missing from the plugin", async () => {
+    const catalog = await liveCatalog();
+    if (!catalog) {
+      console.warn(`[skip] ${CATALOG_URL} unreachable; coverage not checked`);
+      return;
+    }
+    const missing = catalog.capabilities
+      .map((item) => item.id)
+      // tx.preflight is the old alias of transaction.intent.guard.
+      .filter((id) => id !== "tx.preflight" && !(id in CAPABILITY_PRICE_USD));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe("defaults can actually buy what the plugin advertises", () => {
+  test("the default per-call cap covers the dearest check", () => {
+    // The 0.3.1 outage in one line: cap $0.005 against a $0.05 guard.
+    expect(DEFAULT_MAX_PRICE_USD).toBeGreaterThanOrEqual(dearestCapabilityUsd());
+  });
+
+  test("the default daily budget allows more than a single call", () => {
+    expect(DEFAULT_DAILY_BUDGET_USD).toBeGreaterThanOrEqual(DEFAULT_MAX_PRICE_USD * 5);
+  });
+
+  test("priceLabel renders a range for tiered reads and a single price for flat ones", () => {
+    expect(priceLabel("contract.guard")).toBe("$0.01-0.03");
+    expect(priceLabel("transaction.intent.guard")).toBe("$0.05");
+    expect(priceLabel("nope.not.real")).toBe("price unknown");
   });
 });

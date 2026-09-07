@@ -1,7 +1,7 @@
 {
   "name": "plugin-tereno",
-  "version": "0.3.1",
-  "description": "Pre-signature security layer for ElizaOS agents on Base: buy a bounded verdict (unlimited-approval, drainer, suspicious-contract, balance/gas anomaly) before signing. Budget-capped, fail-closed, standardized verdict, dry-run.",
+  "version": "0.4.0",
+  "description": "Pre-signature security layer for ElizaOS agents on Base: buy a bounded verdict (unlimited-approval, drainer, suspicious-contract, swap-limit, balance/gas anomaly) before signing, and verify third-party x402 endpoints before integrating them. Budget-capped, fail-closed, standardized verdict, dry-run.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,7 +9,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "images"
+    "images",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -35,7 +36,10 @@
     "web-scraping",
     "agent-research",
     "evidence",
-    "bazaar"
+    "bazaar",
+    "x402-verification",
+    "endpoint-monitoring",
+    "aerodrome"
   ],
   "repository": {
     "type": "git",
@@ -50,11 +54,11 @@
       },
       "TERENO_MAX_PRICE_USD": {
         "type": "string",
-        "description": "Per-call USDC cap. Default 0.005."
+        "description": "Per-call USDC cap. Default 0.05, which is what the dearest check (transaction.intent.guard, aerodrome.swap.guard) costs. A lower value makes those calls fail before payment."
       },
       "TERENO_DAILY_BUDGET_USD": {
         "type": "string",
-        "description": "Rolling daily USDC budget. Default 0.05."
+        "description": "Rolling daily USDC budget. Default 0.5."
       },
       "TERENO_PRIVATE_ONLY": {
         "type": "string",
@@ -83,17 +87,17 @@
     }
   },
   "dependencies": {
-    "tereno-client": "^0.2.0"
+    "tereno-client": "^0.3.0"
   },
   "peerDependencies": {
     "@elizaos/core": ">=1.0.0",
-    "viem": "^2.52.0"
+    "viem": "^2.56.0"
   },
   "devDependencies": {
     "@elizaos/core": "^1.7.2",
     "@types/node": "^26.1.1",
     "typescript": "^5.0.0",
-    "viem": "^2.52.0"
+    "viem": "^2.56.3"
   },
   "license": "MIT"
 }
