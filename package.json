@@ -94,5 +94,8 @@
     "typescript": "^5.0.0",
     "viem": "^2.56.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "packageType": "plugin",
+  "platform": "node",
+  "npmPackage": "@robmartello/plugin-tereno"
 }
