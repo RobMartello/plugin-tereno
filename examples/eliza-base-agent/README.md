@@ -1,7 +1,7 @@
-# Example: a Base agent that checks before it signs
+# Example: a Base agent that checks before it acts
 
 **Sentinel** is a minimal ElizaOS agent that runs a [Tereno](https://www.tereno.xyz)
-pre-signature check before every transaction or contract interaction, and obeys
+verification check before interacting with Base contracts or prediction questions, and obeys
 the verdict's `recommendedAction` (`sign` / `review` / `abort`).
 
 It starts in **dry-run** — every check simulates with **no payment and no wallet** —
@@ -25,13 +25,13 @@ Then talk to the agent:
 
 ```
 you:      what can you check and what does it cost?
-Sentinel: (TERENO_PREVIEW) coverage + current config — free
+Sentinel: (TERENO_PREVIEW) coverage, reuse dividends + current config — free
 
-you:      is it safe to sign {"from":"0x…","to":"0x…","data":"0x095ea7b3…"}?
-Sentinel: (TERENO_CHECK_TRANSACTION) 🧪 dry-run verdict — no USDC spent
+you:      is contract 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 safe to touch?
+Sentinel: (TERENO_CHECK_CONTRACT) 🧪 dry-run verdict — no USDC spent
 
-you:      compile https://example.com/article into Markdown
-Sentinel: (TERENO_COMPILE_WEB_PAGE) 🧪 input accepted — no fetch or USDC spent
+you:      gather evidence for: Will Ethereum Pectra upgrade activate before Q4 2026?
+Sentinel: (TERENO_PREDICTION_EVIDENCE) 🧪 input accepted — no USDC spent
 ```
 
 ## Going live
@@ -40,7 +40,7 @@ Sentinel: (TERENO_COMPILE_WEB_PAGE) 🧪 input accepted — no fetch or USDC spe
 2. Set `TERENO_PRIVATE_KEY` to a **dedicated hot wallet** (never your main one)
    holding a little USDC on Base.
 3. Keep the budget caps and `TERENO_FAIL_MODE=closed` so a failed check aborts
-   instead of signing blind.
+   instead of interacting blind.
 
 ## The verdict your agent branches on
 

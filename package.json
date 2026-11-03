@@ -1,7 +1,7 @@
 {
   "name": "plugin-tereno",
-  "version": "0.4.0",
-  "description": "Pre-signature security layer for ElizaOS agents on Base: buy a bounded verdict (unlimited-approval, drainer, suspicious-contract, swap-limit, balance/gas anomaly) before signing, and verify third-party x402 endpoints before integrating them. Budget-capped, fail-closed, standardized verdict, dry-run.",
+  "version": "0.5.1",
+  "description": "Base contract safety, chain reads and prediction-market evidence for ElizaOS agents over x402: buy bounded verdicts (contract.guard, token.metadata, chain.snapshot, prediction.evidence) with per-call + daily USDC caps, fail-closed defaults, dry-run mode and seeder reuse dividends.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,24 +22,19 @@
     "eliza",
     "plugin",
     "security",
-    "pre-signature",
-    "transaction-safety",
-    "wallet-security",
-    "preflight",
-    "guard",
+    "contract-guard",
+    "token-metadata",
+    "chain-snapshot",
+    "prediction-evidence",
+    "polymarket",
     "x402",
     "base",
     "usdc",
     "tereno",
     "agent",
-    "web-to-markdown",
-    "web-scraping",
-    "agent-research",
     "evidence",
     "bazaar",
-    "x402-verification",
-    "endpoint-monitoring",
-    "aerodrome"
+    "seeder-dividend"
   ],
   "repository": {
     "type": "git",
@@ -54,7 +49,7 @@
       },
       "TERENO_MAX_PRICE_USD": {
         "type": "string",
-        "description": "Per-call USDC cap. Default 0.05, which is what the dearest check (transaction.intent.guard, aerodrome.swap.guard) costs. A lower value makes those calls fail before payment."
+        "description": "Per-call USDC cap. Default 0.1, which covers the dearest check (contract.guard miss at $0.10). A lower value makes calls above the cap fail before payment."
       },
       "TERENO_DAILY_BUDGET_USD": {
         "type": "string",
@@ -87,7 +82,7 @@
     }
   },
   "dependencies": {
-    "tereno-client": "^0.3.0"
+    "tereno-client": "^0.3.0 || ^0.4.0"
   },
   "peerDependencies": {
     "@elizaos/core": ">=1.0.0",

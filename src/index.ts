@@ -1,8 +1,9 @@
-// ElizaOS plugin for Tereno (https://www.tereno.xyz): paid Base preflight
-// verdicts and chain-data reads over x402 (USDC on Base). The agent pays with
-// its own wallet; every call is capped per invocation (TERENO_MAX_PRICE_USD)
-// and by a rolling daily budget (TERENO_DAILY_BUDGET_USD). No account or API
-// key — the signed x402 payment is the identity.
+// ElizaOS plugin for Tereno (https://www.tereno.xyz): paid Base contract
+// safety verdicts, token/chain reads and prediction-market evidence over x402
+// (USDC on Base). The agent pays with its own wallet; every call is capped per
+// invocation (TERENO_MAX_PRICE_USD) and by a rolling daily budget
+// (TERENO_DAILY_BUDGET_USD). No account or API key — the signed x402 payment
+// is the identity.
 
 import type {
   Action,
@@ -19,6 +20,15 @@ import { createPublicClient, http, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { createTerenoClient, type CapabilityInput } from "tereno-client";
+
+type PluginCapabilityInput =
+  | CapabilityInput
+  | {
+      capabilityId: "prediction.evidence";
+      question: string;
+      market?: string;
+      marketUrl?: string;
+    };
 
 const ADDRESS_RE = /0x[a-fA-F0-9]{40}/;
 const PUBLIC_URL_RE = /https?:\/\/[^\s<>\"\x27]+/i;
@@ -38,11 +48,9 @@ function privateKey(): `0x${string}` | null {
 
 // Defaults must cover the dearest thing the plugin can buy, or the client
 // refuses the quote before paying and every guard degrades to "unavailable".
-// At $0.005 (the pre-0.4.0 default) that was ALL of them except chain.snapshot,
-// and with fail-closed the flagship action answered "block · abort" to every
-// transaction while never spending a cent. See DEFAULT_MAX_PRICE_USD against
-// CAPABILITY_PRICE_USD below; `src/index.test.ts` asserts the relationship.
-export const DEFAULT_MAX_PRICE_USD = 0.05;
+// See DEFAULT_MAX_PRICE_USD against CAPABILITY_PRICE_USD below;
+// `src/index.test.ts` asserts the relationship.
+export const DEFAULT_MAX_PRICE_USD = 0.1;
 export const DEFAULT_DAILY_BUDGET_USD = 0.5;
 
 function maxPriceUsd(): number {
@@ -54,32 +62,17 @@ function maxPriceUsd(): number {
  *
  *  These numbers are read by the action descriptions the model sees, by
  *  TERENO_PREVIEW and by the seeding reserve — so when an agent quotes a price
- *  to a user, it quotes this table. Between 0.3.1 and 0.4.0 the table lived
- *  inline in a dozen description strings and drifted 10x behind the live
- *  catalog: the plugin promised $0.001-0.003 for calls that cost $0.01-0.03,
- *  and its own per-call cap then refused every one of them.
+ *  to a user, it quotes this table.
  *
  *  `src/index.test.ts` asserts each entry against GET /api/v1/capabilities on
  *  the live network, so the next price change fails CI instead of shipping.
- *  It is the second time this class of defect appeared; the test is the stop.
  */
 export const CAPABILITY_PRICE_USD: Record<string, { hit: number; miss: number }> = {
-  "contract.guard": { hit: 0.01, miss: 0.03 },
-  "contract.change": { hit: 0.01, miss: 0.02 },
-  "contract.interface": { hit: 0.01, miss: 0.02 },
+  "contract.guard": { hit: 0.02, miss: 0.1 },
   "token.metadata": { hit: 0.01, miss: 0.03 },
   "chain.snapshot": { hit: 0.002, miss: 0.005 },
-  "transaction.intent.guard": { hit: 0.05, miss: 0.05 },
-  "aerodrome.swap.guard": { hit: 0.05, miss: 0.05 },
-  "evidence.artifact": { hit: 0.01, miss: 0.03 },
-  "web.compile": { hit: 0.02, miss: 0.03 },
-  "obligation.verdict": { hit: 0.001, miss: 0.001 },
+  "prediction.evidence": { hit: 0.01, miss: 0.05 },
 };
-
-/** Price for the assurance front. It is not in the capability catalog by
- *  design — it is measured as its own experiment — so it carries its own
- *  entry and its own assertion in the drift test. */
-export const ASSURANCE_PRICE_USD = 0.03;
 
 /** "$0.01-0.03" for a tiered read, "$0.05" for a flat one. */
 export function priceLabel(capabilityId: string): string {
@@ -91,7 +84,7 @@ export function priceLabel(capabilityId: string): string {
 /** The most any single call can cost, used to check the configured cap is not
  *  set below what the agent is being told it can buy. */
 export function dearestCapabilityUsd(): number {
-  return Math.max(ASSURANCE_PRICE_USD, ...Object.values(CAPABILITY_PRICE_USD).map((p) => p.miss));
+  return Math.max(...Object.values(CAPABILITY_PRICE_USD).map((p) => p.miss));
 }
 
 // Rolling daily budget so a chatty agent cannot drain its wallet.
@@ -166,7 +159,7 @@ export function failVerdict(reason: string, financial: boolean): TerenoVerdict {
 // ————— Anonymous telemetry (issues #9/#10) —————
 // Opt-out (TERENO_TELEMETRY=off). STRICT allowlist below — this is the ONLY
 // data ever transmitted. Never the private key, prompt, secrets or tx content.
-const PLUGIN_VERSION = "0.4.0";
+const PLUGIN_VERSION = "0.5.1";
 
 function telemetryEnabled(): boolean {
   return env("TERENO_TELEMETRY").toLowerCase() !== "off";
@@ -276,20 +269,46 @@ function firstPublicUrl(message: Memory): string | null {
   return (message.content.text || "").match(PUBLIC_URL_RE)?.[0] ?? null;
 }
 
-/** The unsigned transaction both signing guards need, parsed out of the
- *  message. Shared so `transaction.intent.guard` and `aerodrome.swap.guard`
- *  can never disagree about what a caller has to send. */
-function unsignedTransaction(message: Memory):
-  { from: string; to: string; data: string; value: string } | null {
-  const json = (message.content.text || "").match(/\{[\s\S]*\}/)?.[0];
-  if (!json) return null;
-  try {
-    const parsed = JSON.parse(json) as { from?: string; to?: string; data?: string; value?: string };
-    if (!parsed.from || !parsed.to || !ADDRESS_RE.test(parsed.from) || !ADDRESS_RE.test(parsed.to)) return null;
-    return { from: parsed.from, to: parsed.to, data: parsed.data ?? "0x", value: parsed.value ?? "0" };
-  } catch {
-    return null;
+function predictionEvidenceInput(message: Memory): {
+  capabilityId: "prediction.evidence";
+  question: string;
+  market?: string;
+  marketUrl?: string;
+} | null {
+  const raw = (message.content.text || "").trim();
+  if (!raw) return null;
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)?.[0];
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch) as {
+        question?: unknown;
+        market?: unknown;
+        marketUrl?: unknown;
+      };
+      if (typeof parsed.question === "string" && parsed.question.trim().length >= 5) {
+        return {
+          capabilityId: "prediction.evidence",
+          question: parsed.question.trim().slice(0, 2000),
+          ...(typeof parsed.market === "string" && parsed.market.trim()
+            ? { market: parsed.market.trim().toLowerCase() }
+            : {}),
+          ...(typeof parsed.marketUrl === "string" && parsed.marketUrl.trim()
+            ? { marketUrl: parsed.marketUrl.trim() }
+            : {}),
+        };
+      }
+    } catch {
+      // Fall through to plain-text parsing.
+    }
   }
+  const url = firstPublicUrl(message);
+  const question = (url ? raw.replace(url, "") : raw).trim();
+  if (question.length < 5) return null;
+  return {
+    capabilityId: "prediction.evidence",
+    question: question.slice(0, 2000),
+    ...(url ? { marketUrl: url } : {}),
+  };
 }
 
 function requestedCapability(message: Memory): string | null {
@@ -421,7 +440,7 @@ function paidAction(config: {
   name: string;
   similes: string[];
   description: string;
-  buildInput: (message: Memory) => CapabilityInput | null;
+  buildInput: (message: Memory) => PluginCapabilityInput | null;
   missingInputText: string;
   /** true for actions that gate a signature/spend (fail-closed by default). */
   financial?: boolean;
@@ -472,7 +491,7 @@ function paidAction(config: {
       }
       try {
         const tereno = client();
-        const { data } = await tereno.invokeCapability<VerdictResult>(input);
+        const { data } = await tereno.invokeCapability<VerdictResult>(input as CapabilityInput);
         const paid = data.pricing?.pricePaidUsd ?? perCall;
         spentTodayUsd += paid;
         const repeat = paidCallCount > 0;
@@ -517,7 +536,7 @@ const checkContract = paidAction({
   name: "TERENO_CHECK_CONTRACT",
   similes: ["IS_CONTRACT_SAFE", "CONTRACT_GUARD", "CHECK_ADDRESS_SAFETY"],
   description:
-    `Before interacting with a Base contract, buy a bounded allow/review/block verdict (code present, proxy, paused) via Tereno contract.guard (${priceLabel("contract.guard")} USDC over x402). Use when the user asks whether a Base contract or token address is safe to interact with.`,
+    `Before interacting with a Base contract, buy a bounded allow/review/block verdict (code present, EIP-1967 proxy implementation/admin, paused state) via Tereno contract.guard (${priceLabel("contract.guard")} USDC over x402 — first settled payer or free audited publisher becomes the seeder and earns 20% of later cross-wallet reuses up to $0.18). Use when the user asks whether a Base contract or token address is safe to interact with.`,
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "contract.guard", address } : null;
@@ -530,7 +549,7 @@ const tokenInfo = paidAction({
   name: "TERENO_TOKEN_INFO",
   similes: ["TOKEN_METADATA", "WHAT_TOKEN_IS_THIS", "TOKEN_LOOKUP"],
   description:
-    `Read a Base token's on-chain identity — name, symbol, decimals, total supply — via Tereno token.metadata (${priceLabel("token.metadata")} USDC over x402 — you pay less when another agent already computed it). Use when the user asks what a token address is.`,
+    `Read a Base token's on-chain identity — name, symbol, decimals, total supply — via Tereno token.metadata (${priceLabel("token.metadata")} USDC over x402 — you pay less when another agent already computed it, and the first settled payer earns $0.002 per cross-wallet reuse up to $0.15). Use when the user asks what a token address is.`,
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "token.metadata", address } : null;
@@ -538,209 +557,23 @@ const tokenInfo = paidAction({
   missingInputText: "I need a Base token address (0x…) to look up its metadata.",
 });
 
-const contractInterface = paidAction({
-  name: "TERENO_CONTRACT_INTERFACE",
-  similes: ["DETECT_CONTRACT_STANDARD", "IS_IT_ERC20", "IS_IT_NFT"],
-  description:
-    `Detect which standard a Base contract implements — ERC-20, ERC-721, ERC-1155, ERC-165, EIP-1967 proxy — via Tereno contract.interface (${priceLabel("contract.interface")} USDC over x402 — you pay less when another agent already computed it).`,
-  buildInput: (message) => {
-    const address = firstAddress(message);
-    return address ? { capabilityId: "contract.interface", address } : null;
-  },
-  missingInputText: "I need a Base contract address (0x…) to detect its interfaces.",
-});
-
-const contractChanged = paidAction({
-  name: "TERENO_CONTRACT_CHANGED",
-  similes: ["DID_CONTRACT_CHANGE", "RUG_PULL_CHECK", "PROXY_UPGRADE_CHECK"],
-  description:
-    `Check whether a Base contract changed since Tereno last observed it — bytecode swap, proxy implementation/admin change, pause — via contract.change (${priceLabel("contract.change")} USDC over x402 — you pay less when another agent already computed it). The classic rug-pull-after-audit detector.`,
-  buildInput: (message) => {
-    const address = firstAddress(message);
-    return address ? { capabilityId: "contract.change", address } : null;
-  },
-  missingInputText: "I need a Base contract address (0x…) to compare with Tereno's previous observation.",
-  financial: true,
-});
-
 const chainSnapshot = paidAction({
   name: "TERENO_CHAIN_SNAPSHOT",
   similes: ["BASE_GAS_PRICE", "LATEST_BASE_BLOCK", "BASE_CHAIN_STATE"],
   description:
-    `Get the current Base chain state — latest block, timestamp, base fee and suggested gas fees — via Tereno chain.snapshot (${priceLabel("chain.snapshot")} USDC over x402 — you pay less when another agent already computed it). No parameters needed.`,
+    `Get the current Base chain state — latest block, timestamp, base fee and suggested gas fees — via Tereno chain.snapshot (${priceLabel("chain.snapshot")} USDC over x402 — you pay less when another agent already computed it, and the first settled payer earns $0.002 per cross-wallet reuse up to $0.10). No parameters needed.`,
   buildInput: () => ({ capabilityId: "chain.snapshot" }),
   missingInputText: "",
 });
 
-const checkTransaction = paidAction({
-  name: "TERENO_CHECK_TRANSACTION",
-  similes: ["IS_IT_SAFE_TO_SIGN", "SIMULATE_TRANSACTION", "TX_PREFLIGHT"],
+const predictionEvidence = paidAction({
+  name: "TERENO_PREDICTION_EVIDENCE",
+  similes: ["PREDICTION_MARKET_EVIDENCE", "POLYMARKET_EVIDENCE", "VERIFY_PREDICTION_QUESTION"],
   description:
-    `Before signing a Base transaction, buy a private pre-sign verdict — intent classification, simulation, gas, balance/allowance deltas, drainer/unlimited-approval flags — via Tereno transaction.intent.guard (${priceLabel("transaction.intent.guard")} USDC over x402). The message must contain a JSON object with from, to and optional data/value.`,
-  buildInput: (message) => {
-    const tx = unsignedTransaction(message);
-    return tx ? { capabilityId: "transaction.intent.guard", ...tx } : null;
-  },
+    `Gather structured, reproducible on-chain and Polymarket evidence for a prediction market question via Tereno prediction.evidence (${priceLabel("prediction.evidence")} USDC over x402 — you pay $0.01 on a cache hit, and the first settled payer earns $0.002 per cross-wallet reuse up to $0.25). Pass a prediction question (and optional Polymarket URL or JSON with question/market/marketUrl).`,
+  buildInput: (message) => predictionEvidenceInput(message),
   missingInputText:
-    'To simulate before signing I need the unsigned transaction as JSON, e.g. {"from":"0x…","to":"0x…","data":"0x…","value":"0"}.',
-  financial: true,
-});
-
-const checkSwap = paidAction({
-  name: "TERENO_CHECK_SWAP",
-  similes: ["IS_THIS_SWAP_SAFE", "AERODROME_SWAP_GUARD", "CHECK_SWAP_SLIPPAGE"],
-  description:
-    `Before signing a prepared Aerodrome swap on Base, check whether it still satisfies its own encoded limit right now — decode the minimum-output or maximum-input constraint, simulate the unsigned transaction, and return bounded evidence — via Tereno aerodrome.swap.guard (${priceLabel("aerodrome.swap.guard")} USDC over x402). Does not predict inclusion and does not protect against MEV. The message must contain a JSON object with from, to (a supported Aerodrome Classic or Slipstream router) and the prepared calldata in data.`,
-  buildInput: (message) => {
-    const tx = unsignedTransaction(message);
-    // Unlike the generic guard, empty calldata is not a swap. Refusing it here
-    // means the caller gets the reason for free instead of paying to be told.
-    if (!tx || tx.data === "0x") return null;
-    return { capabilityId: "aerodrome.swap.guard", ...tx };
-  },
-  missingInputText:
-    'To check an Aerodrome swap I need the prepared, unsigned transaction as JSON with real calldata, e.g. {"from":"0x…","to":"0x…router…","data":"0x903638a4…","value":"0"}.',
-  financial: true,
-});
-
-/** A paid capability the typed client does not model yet, bought through the
- *  generic x402 path. Kept separate from `paidAction` on purpose: these two
- *  return their own payload shapes rather than a guard verdict, so squeezing
- *  them into `normalizeVerdict` would invent a decision nobody computed. */
-function paidReadAction(config: {
-  name: string;
-  similes: string[];
-  description: string;
-  priceUsd: number;
-  buildRequest: (message: Memory) => { url: string; init?: RequestInit } | null;
-  missingInputText: string;
-  format: (data: Record<string, unknown>) => string;
-  checkType: string;
-}): Action {
-  return {
-    name: config.name,
-    similes: config.similes,
-    description: config.description,
-    validate: async (_runtime: IAgentRuntime, message: Memory) =>
-      dryRunEnabled() || (privateKey() !== null && sourceAllowed(message)),
-    handler: async (
-      _runtime: IAgentRuntime,
-      message: Memory,
-      _state: State | undefined,
-      _options: unknown,
-      callback: HandlerCallback | undefined,
-    ): Promise<ActionResult> => {
-      const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
-        await callback?.({ text, actions: [config.name], source: message.content.source });
-        return { success, text, data: data as Record<string, unknown> | undefined };
-      };
-      const request = config.buildRequest(message);
-      if (!request) return respond(config.missingInputText, false);
-      if (dryRunEnabled()) {
-        return respond(`🧪 dry-run: input accepted for ${config.checkType}; no x402 payment made.`, true, { paidUsd: 0 });
-      }
-      if (config.priceUsd > maxPriceUsd()) {
-        return respond(
-          `${config.checkType} costs $${config.priceUsd} but the per-call cap is $${maxPriceUsd()}. Raise TERENO_MAX_PRICE_USD to buy it.`,
-          false,
-        );
-      }
-      if (!underDailyBudget(config.priceUsd)) {
-        sendTelemetry({ event: "check", checkType: config.checkType, completed: false, paid: false, error: "budget_exhausted" });
-        return respond("The daily USDC budget is exhausted; I did not buy that.", false);
-      }
-      try {
-        const { data } = await client().buy<Record<string, unknown>>(request.url, request.init);
-        const pricing = data.pricing as { pricePaidUsd?: number } | undefined;
-        const paid = pricing?.pricePaidUsd ?? config.priceUsd;
-        spentTodayUsd += paid;
-        paidCallCount += 1;
-        sendTelemetry({
-          event: "check", checkType: config.checkType, completed: true, paid: true,
-          costUsd: paid, repeat: paidCallCount > 1, error: null,
-        });
-        return respond(config.format(data), true, data);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        logger.warn({ error, action: config.name }, "Tereno paid read failed");
-        sendTelemetry({ event: "check", checkType: config.checkType, completed: false, paid: false, error: "integration_error" });
-        // Nothing was charged: x402 settles only on a successful response.
-        return respond(`Could not complete ${config.checkType}: ${reason}`, false);
-      }
-    },
-    examples: [],
-  };
-}
-
-const OBLIGATION_ID_RE = /0x[0-9a-f]{64}/i;
-
-const obligationVerdictAction = paidReadAction({
-  name: "TERENO_OBLIGATION_VERDICT",
-  similes: ["WAS_THE_CONDITION_MET", "CHECK_OBLIGATION", "TERENO_CLAIM_VERDICT"],
-  description:
-    `Was a published Tereno economic condition satisfied? Buy a recomputed verdict on an obligation id, with the receipt bytes, the challenge count and the inputs to reach the same verdict independently (${priceLabel("obligation.verdict")} USDC over x402). No escrow, no custody: the verdict is the product, and it says out loud when it is not decision-grade. Real ids come free from GET /api/v1/claims.`,
-  priceUsd: CAPABILITY_PRICE_USD["obligation.verdict"].miss,
-  checkType: "obligation.verdict",
-  buildRequest: (message) => {
-    const id = (message.content.text || "").match(OBLIGATION_ID_RE)?.[0];
-    return id ? { url: `/api/v1/capabilities/obligation.verdict/invoke?obligationId=${id}` } : null;
-  },
-  missingInputText:
-    "I need an obligation id (0x + 64 hex characters). GET /api/v1/claims lists real ones for free.",
-  format: (data) => {
-    const result = (data.result ?? {}) as { verdict?: string; decisionGrade?: boolean; summary?: string };
-    const pricing = data.pricing as { pricePaidUsd?: number } | undefined;
-    return [
-      `Obligation verdict: ${result.verdict ?? "unknown"}`,
-      result.summary ?? null,
-      result.decisionGrade === false
-        ? "⚠️ Not decision-grade — do not gate anything on this verdict."
-        : null,
-      `Paid $${pricing?.pricePaidUsd ?? 0} USDC (x402).`,
-    ].filter(Boolean).join("\n");
-  },
-});
-
-const assuranceAction = paidReadAction({
-  name: "TERENO_CHECK_X402_ENDPOINT",
-  similes: ["IS_THIS_X402_ENDPOINT_CALLABLE", "X402_ENDPOINT_ASSURANCE", "VERIFY_X402_ENDPOINT"],
-  description:
-    `Is another x402 endpoint actually callable? Probe any x402 resource URL and buy a reproducible report ($${ASSURANCE_PRICE_USD} USDC over x402): price, payTo, network, schema and example quality, whether its own advertised input still reaches a challenge, whether its description fits the facilitator limit that silently blocks settlement, plus availability history and a diff since the last observation. Use before listing, recommending or integrating a paid endpoint you did not write.`,
-  priceUsd: ASSURANCE_PRICE_USD,
-  checkType: "x402.endpoint.assurance",
-  buildRequest: (message) => {
-    const resource = firstPublicUrl(message);
-    if (!resource) return null;
-    return {
-      url: "/api/v1/x402/assurance/invoke",
-      init: {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ resource, method: "GET" }),
-      },
-    };
-  },
-  missingInputText: "I need the public URL of the x402 endpoint to measure.",
-  format: (data) => {
-    const report = (data.report ?? {}) as {
-      host?: string;
-      reachability?: { status?: string; httpStatus?: number; latencyMs?: number };
-      challenge?: { priceUsd?: number; network?: string };
-      conformance?: { level?: string; passed?: number; failed?: number; checks?: { id: string; ok: boolean | null; detail: string }[] };
-      history?: { observations?: number; changesSinceLast?: { field: string; from: string | null; to: string | null }[] };
-    };
-    const failed = (report.conformance?.checks ?? []).filter((check) => check.ok === false);
-    const changes = report.history?.changesSinceLast ?? [];
-    return [
-      `${data.assurance === "failing" ? "⛔" : "✅"} ${report.host ?? "endpoint"}: ${data.assurance} · conformance ${report.conformance?.level ?? "unknown"} (${report.conformance?.passed ?? 0} passed, ${report.conformance?.failed ?? 0} failed)`,
-      `Reachability ${report.reachability?.status ?? "?"} (HTTP ${report.reachability?.httpStatus ?? "?"}, ${report.reachability?.latencyMs ?? "?"}ms) · lists at $${report.challenge?.priceUsd ?? "?"} on ${report.challenge?.network ?? "?"}`,
-      ...failed.map((check) => `✗ ${check.id}: ${check.detail}`),
-      changes.length ? `Changed since last look: ${changes.map((c) => `${c.field} ${c.from} → ${c.to}`).join(", ")}` : null,
-      // A single observation carries no reliability history, and saying so
-      // stops the agent from reading one probe as an uptime record.
-      (report.history?.observations ?? 0) < 2 ? "First observation of this endpoint — no availability history or diff yet." : null,
-    ].filter(Boolean).join("\n");
-  },
+    "I need a prediction market question (at least 5 characters, optionally with a Polymarket URL) to gather evidence.",
 });
 
 const evidenceArtifactAction: Action = {
@@ -764,46 +597,9 @@ const evidenceArtifactAction: Action = {
         data.provenance?.validUntil ? "Valid until: " + data.provenance.validUntil : null,
         data.verification?.href ? "Verify: " + data.verification.href : null,
         data.observation?.recorded ? "Cross-agent reference observation recorded." : null,
-      ].filter(Boolean).join("\\n"), true, data);
+      ].filter(Boolean).join("\n"), true, data);
     } catch (error) {
       return respond("Could not verify that evidence: " + (error instanceof Error ? error.message : String(error)), false);
-    }
-  },
-  examples: [],
-};
-
-const webCompileAction: Action = {
-  name: "TERENO_COMPILE_WEB_PAGE",
-  similes: ["URL_TO_MARKDOWN", "COMPILE_WEB_PAGE", "READ_WEB_PAGE_FOR_AGENT"],
-  description: `Turn one public URL into bounded, LLM-ready Markdown with resolved links, citations and a content-addressed Tereno artifact. Uses x402 only after a wallet-specific quote is within the configured cap (${priceLabel("web.compile")}: you pay the lower end while another agent's fresh compile of the same page is still reusable).`,
-  validate: async (_runtime, message) => dryRunEnabled() || (privateKey() !== null && sourceAllowed(message)),
-  handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
-    const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
-      await callback?.({ text, actions: ["TERENO_COMPILE_WEB_PAGE"], source: message.content.source });
-      return { success, text, data: data as Record<string, unknown> | undefined };
-    };
-    const url = firstPublicUrl(message);
-    if (!url) return respond("I need one public http(s) URL to compile into Markdown.", false);
-    if (dryRunEnabled()) return respond("Dry-run: accepted " + url + " for web.compile; no page was fetched and no x402 payment was made. Set TERENO_DRY_RUN=false to compile it.", true, { url, paidUsd: 0 });
-    if (!underDailyBudget(maxPriceUsd())) return respond("The daily USDC budget is exhausted; I did not compile the page.", false);
-    try {
-      const { data } = await client().compileWebPage<{ invocationId?: string; artifact?: { artifactId?: string; cacheStatus?: string; expiresAt?: string }; output?: { sourceUrl?: string; title?: string; contentHash?: string; links?: unknown[] }; pricing?: { pricePaidUsd?: number }; receiptUrl?: string }>(url);
-      const paid = data.pricing?.pricePaidUsd ?? maxPriceUsd();
-      spentTodayUsd += paid;
-      paidCallCount += 1;
-      sendTelemetry({ event: "check", checkType: "web.compile", completed: true, paid: true, costUsd: paid, cacheHit: data.artifact?.cacheStatus === "hit", repeat: paidCallCount > 1, error: null });
-      const lines = [
-        "Compiled: " + (data.output?.title || data.output?.sourceUrl || url),
-        "Paid: $" + paid + " USDC · cache " + (data.artifact?.cacheStatus || "unknown"),
-        data.artifact?.artifactId ? "Artifact: " + data.artifact.artifactId : null,
-        data.artifact?.expiresAt ? "Fresh until: " + data.artifact.expiresAt : null,
-        data.receiptUrl ? "Receipt: " + data.receiptUrl : null,
-      ].filter(Boolean).join("\\n");
-      return respond(lines, true, data);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      sendTelemetry({ event: "check", checkType: "web.compile", completed: false, paid: false, error: "integration_error" });
-      return respond("Could not compile that page: " + reason, false);
     }
   },
   examples: [],
@@ -821,7 +617,7 @@ const opportunitiesAction: Action = {
       const data = await response.json() as { opportunities?: Array<{ requestedCapability: string; unknownCapabilityRequests: number; unknownMcpToolCalls: number; pledgeWallets: number; fulfilledPledges: number; signal: string }> };
       if (!response.ok) throw new Error("Tereno opportunities unavailable");
       const rows = data.opportunities ?? [];
-      const text = rows.length ? "Tereno opportunity signals (not PMF proof):\\n" + rows.map((item) => "- " + item.requestedCapability + ": " + (item.unknownCapabilityRequests + item.unknownMcpToolCalls) + " observed ask(s), " + item.pledgeWallets + " pledge wallet(s), " + item.fulfilledPledges + " paid proof (" + item.signal + ")").join("\\n") : "No aggregate opportunity signals yet.";
+      const text = rows.length ? "Tereno opportunity signals (not PMF proof):\n" + rows.map((item) => "- " + item.requestedCapability + ": " + (item.unknownCapabilityRequests + item.unknownMcpToolCalls) + " observed ask(s), " + item.pledgeWallets + " pledge wallet(s), " + item.fulfilledPledges + " paid proof (" + item.signal + ")").join("\n") : "No aggregate opportunity signals yet.";
       await callback?.({ text, actions: ["TERENO_OPPORTUNITIES"], source: message.content.source });
       return { success: true, text, data };
     } catch (error) {
@@ -864,11 +660,6 @@ const pledgeDemandAction: Action = {
       return { success, text, data: data as Record<string, unknown> | undefined };
     };
     if (!capability) {
-      // The catalog publishes the names Tereno would actually build, under
-      // `proposed.proposals[].pledgeAs`. Asking the caller to guess a name was
-      // the same defect as advertising an input that gets refused: the pledge
-      // endpoint accepts any string, so a guessed name records demand for a
-      // capability that will never exist.
       const names = await proposedCapabilityNames();
       return respond(
         names.length
@@ -895,7 +686,12 @@ const pledgeDemandAction: Action = {
 
 interface Bounty {
   capabilityId: string;
-  input: { address?: string };
+  input: {
+    address?: string;
+    question?: string;
+    market?: string;
+    marketUrl?: string;
+  };
   misses: number;
   fulfillment: "publish" | "first_settled_invocation";
   seederEconomics: { dividendPerSettledReuseUsd: number; lifetimeCapUsd: number };
@@ -925,7 +721,11 @@ async function fetchBounties(): Promise<Bounty[]> {
 }
 
 function formatBounty(bounty: Bounty): string {
-  const target = bounty.input.address ? ` for ${bounty.input.address}` : "";
+  const target = bounty.input.address
+    ? ` for ${bounty.input.address}`
+    : bounty.input.question
+      ? ` for "${bounty.input.question}"`
+      : "";
   const path = bounty.fulfillment === "publish"
     ? "publish a signed fingerprint (free RPC work)"
     : "be the first settled payer";
@@ -956,6 +756,24 @@ async function seedByPublishing(address: string): Promise<string> {
   return `Publishing ${address} returned "${result.status}"${result.note ? ` — ${result.note}` : ""}.`;
 }
 
+function bountyToCapabilityInput(bounty: Bounty): PluginCapabilityInput | null {
+  if (bounty.capabilityId === "token.metadata" && bounty.input.address) {
+    return { capabilityId: "token.metadata", address: bounty.input.address };
+  }
+  if (bounty.capabilityId === "chain.snapshot") {
+    return { capabilityId: "chain.snapshot" };
+  }
+  if (bounty.capabilityId === "prediction.evidence" && bounty.input.question) {
+    return {
+      capabilityId: "prediction.evidence",
+      question: bounty.input.question,
+      ...(bounty.input.market ? { market: bounty.input.market } : {}),
+      ...(bounty.input.marketUrl ? { marketUrl: bounty.input.marketUrl } : {}),
+    };
+  }
+  return null;
+}
+
 const bountiesAction: Action = {
   name: "TERENO_BOUNTIES",
   similes: ["WHAT_DOES_THE_NETWORK_WANT", "OPEN_BOUNTIES", "TERENO_DEMAND"],
@@ -983,7 +801,7 @@ const seedAction: Action = {
   name: "TERENO_SEED",
   similes: ["SEED_BOUNTY", "EARN_TERENO_CREDITS", "FULFIL_BOUNTY", "CONTRIBUTE_WORK"],
   description:
-    `Fulfil a Tereno bounty and claim the seeder slot. For contract.guard bounties the agent computes the bytecode fingerprint itself (free RPC work) and publishes it signed — audited by recomputation. For chain-data bounties it pays the first settled invocation within budget (${priceLabel("token.metadata")}, the cold-call price). Seeders earn 20% of every settled cross-wallet reuse as credits that discount the guard capabilities. Use when asked to seed, contribute or earn credits; an explicit 0x address seeds that contract directly.`,
+    `Fulfil a Tereno bounty and claim the seeder slot. For contract.guard bounties the agent computes the bytecode fingerprint itself (free RPC work) and publishes it signed — audited by recomputation. For token.metadata (${priceLabel("token.metadata")}), chain.snapshot (${priceLabel("chain.snapshot")}) or prediction.evidence (${priceLabel("prediction.evidence")}) bounties it pays the first settled invocation within budget. Seeders earn 20% of every settled cross-wallet reuse as credits that discount future calls. Use when asked to seed, contribute or earn credits; an explicit 0x address seeds that contract directly.`,
   validate: async (_runtime: IAgentRuntime, message: Memory) =>
     privateKey() !== null && sourceAllowed(message),
   handler: async (
@@ -1006,28 +824,23 @@ const seedAction: Action = {
       const publishable = bounties.find((bounty) => bounty.fulfillment === "publish" && bounty.input.address);
       if (publishable) return respond(await seedByPublishing(publishable.input.address!), true);
 
-      const payable = bounties.find((bounty) =>
-        bounty.fulfillment === "first_settled_invocation" && bounty.input.address &&
-        (bounty.capabilityId === "token.metadata" || bounty.capabilityId === "contract.interface"));
+      const payable = bounties.find(
+        (bounty) =>
+          bounty.fulfillment === "first_settled_invocation" &&
+          bountyToCapabilityInput(bounty) !== null,
+      );
       if (!payable) return respond("No fulfillable bounty is open right now.", false);
-      // A cold seed is a cache miss, so it is priced at the capability's MISS
-      // price, which is the only number that bounds what this call will cost.
-      // `lifetimeCapUsd` was used here and is a different quantity entirely —
-      // the lifetime ceiling on what the seeder can EARN, currently $0.03 —
-      // so the reserve happened to be ~10x the real cost and, before the cap
-      // was raised, blocked the seed on a budget that was never going to be
-      // spent. Fall back to the miss price this plugin advertises.
+
+      const input = bountyToCapabilityInput(payable)!;
       const seedCostUsd = CAPABILITY_PRICE_USD[payable.capabilityId]?.miss ?? DEFAULT_MAX_PRICE_USD;
       if (!underDailyBudget(seedCostUsd)) {
         return respond("Found a payable bounty, but the daily USDC budget is exhausted.", false);
       }
-      const { data } = await client().invokeCapability<VerdictResult>({
-        capabilityId: payable.capabilityId as "token.metadata" | "contract.interface",
-        address: payable.input.address!,
-      });
+      const { data } = await client().invokeCapability<VerdictResult>(input as CapabilityInput);
       spentTodayUsd += data.pricing?.pricePaidUsd ?? seedCostUsd;
+      const target = payable.input.address ?? payable.input.question ?? payable.capabilityId;
       return respond(
-        `🌱 Paid $${data.pricing?.pricePaidUsd ?? seedCostUsd} to seed ${payable.capabilityId} for ${payable.input.address}. As first settled payer I claimed the seeder slot: every settled reuse by another wallet now pays me $${payable.seederEconomics.dividendPerSettledReuseUsd} in credits (cap $${payable.seederEconomics.lifetimeCapUsd}).`,
+        `🌱 Paid $${data.pricing?.pricePaidUsd ?? seedCostUsd} to seed ${payable.capabilityId} (${target}). As first settled payer I claimed the seeder slot: every settled reuse by another wallet now pays me $${payable.seederEconomics.dividendPerSettledReuseUsd} in credits (cap $${payable.seederEconomics.lifetimeCapUsd}).`,
         true, data,
       );
     } catch (error) {
@@ -1156,7 +969,7 @@ const previewAction: Action = {
   name: "TERENO_PREVIEW",
   similes: ["TERENO_HELP", "WHAT_CAN_TERENO_CHECK", "TERENO_COVERAGE", "TERENO_COST"],
   description:
-    "Free: explain what the Tereno security checks cover, what each costs, and the current safety config (per-call cap, daily budget, fail mode, dry-run). No payment, no wallet needed. Use to preview before spending.",
+    "Free: explain what the Tereno security checks and evidence tools cover, what each costs, how the seeder reuse dividend works, and the current safety config (per-call cap, daily budget, fail mode, dry-run). No payment, no wallet needed. Use to preview before spending.",
   validate: async () => true,
   handler: async (
     _runtime: IAgentRuntime,
@@ -1167,23 +980,16 @@ const previewAction: Action = {
   ): Promise<ActionResult> => {
     const configured = privateKey() !== null;
     const text = [
-      "🛡️ Tereno — pre-signature safety for Base agents. Coverage:",
-      `• TERENO_CHECK_TRANSACTION (${priceLabel("transaction.intent.guard")}) — is this safe to sign? simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags`,
-      `• TERENO_CHECK_SWAP (${priceLabel("aerodrome.swap.guard")}) — will this prepared Aerodrome swap still satisfy its own limit?`,
-      `• TERENO_CHECK_CONTRACT (${priceLabel("contract.guard")}) — is this contract safe to touch? code, proxy, pause`,
-      `• TERENO_CONTRACT_CHANGED (${priceLabel("contract.change")}) — did it change since last look? (rug-after-audit)`,
-      `• TERENO_TOKEN_INFO (${priceLabel("token.metadata")}) / TERENO_CONTRACT_INTERFACE (${priceLabel("contract.interface")}) / TERENO_CHAIN_SNAPSHOT (${priceLabel("chain.snapshot")}) — reads, cheapest when shared`,
-      `• TERENO_COMPILE_WEB_PAGE (${priceLabel("web.compile")}) — cited, reusable Markdown from one public URL`,
-      `• TERENO_CHECK_X402_ENDPOINT ($${ASSURANCE_PRICE_USD}) — is another x402 endpoint callable, well-formed and stable since last look?`,
-      `• TERENO_OBLIGATION_VERDICT (${priceLabel("obligation.verdict")}) — was a published economic condition satisfied?`,
+      "🛡️ Tereno — Base contract safety, chain reads & prediction evidence for agents. Coverage:",
+      `• TERENO_CHECK_CONTRACT (${priceLabel("contract.guard")}) — is this Base contract safe to touch? code, proxy, pause`,
+      `• TERENO_TOKEN_INFO (${priceLabel("token.metadata")}) — ERC-20 identity (name, symbol, decimals, totalSupply)`,
+      `• TERENO_CHAIN_SNAPSHOT (${priceLabel("chain.snapshot")}) — latest Base block, timestamp, base fee & gas priority fee`,
+      `• TERENO_PREDICTION_EVIDENCE (${priceLabel("prediction.evidence")}) — structured on-chain + Polymarket evidence brief for a prediction market question`,
       "• TERENO_VERIFY_EVIDENCE (free) — provenance and recomputation input for a public artifact",
+      "• TERENO_BOUNTIES (free) / TERENO_SEED — seed open demand or publish signed contract fingerprints to earn 20% reuse dividends ($0.002/reuse)",
       "• TERENO_OPPORTUNITIES (free) / TERENO_PLEDGE_DEMAND (free, explicit) — observed demand, never PMF proof",
-      "Every verdict returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
+      "Every check returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
       `Config: per-call cap $${maxPriceUsd()} · daily budget $${env("TERENO_DAILY_BUDGET_USD", String(DEFAULT_DAILY_BUDGET_USD))} · fail-${failClosed() ? "closed" : "open"}${dryRunEnabled() ? " · DRY-RUN (no payment)" : ""}`,
-      // A cap below the dearest call is not a preference, it is a silent
-      // outage: the client refuses the quote and every guard degrades to
-      // "unavailable". Say it here rather than let the agent discover it
-      // one failed verdict at a time.
       maxPriceUsd() < dearestCapabilityUsd()
         ? `⚠️ Per-call cap $${maxPriceUsd()} is below the dearest check ($${dearestCapabilityUsd()}). Calls above the cap are refused before payment and return "guard unavailable". Raise TERENO_MAX_PRICE_USD.`
         : null,
@@ -1195,6 +1001,36 @@ const previewAction: Action = {
   examples: [],
 };
 
+const rulesAction: Action = {
+  name: "TERENO_RULES",
+  similes: ["TERENO_COOPERATION_RULES", "HOW_TERENO_WORKS", "AGENT_GUIDE", "SEIZE_DIVIDENDS"],
+  description:
+    "Free: read Tereno's cooperative rules of engagement for AI agents: how cache sharing saves up to 80% on compute, how seeders earn 20% reuse dividends on open bounties, and how passing verifiable evidence artifacts saves funds. No payment, no wallet needed.",
+  validate: async () => true,
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state: State | undefined,
+    _options: unknown,
+    callback: HandlerCallback | undefined,
+  ): Promise<ActionResult> => {
+    const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz");
+    try {
+      const response = await fetch(`${baseUrl}/agent.md?source=plugin-tereno`, {
+        headers: { accept: "text/markdown" }, signal: AbortSignal.timeout(10_000),
+      });
+      const text = response.ok ? await response.text() : "Could not fetch /agent.md";
+      await callback?.({ text, actions: ["TERENO_RULES"], source: message.content.source });
+      return { success: true, text };
+    } catch {
+      const fallback = "Tereno Agent Rules: Reusing verified artifacts costs $0.01 (vs $0.10 compute). First settled payer or free audited fingerprint publisher earns 20% ($0.002) of every settled cross-wallet reuse in discount credits. Query /api/v1/bounties to see open demand.";
+      await callback?.({ text: fallback, actions: ["TERENO_RULES"], source: message.content.source });
+      return { success: true, text: fallback };
+    }
+  },
+  examples: [],
+};
+
 export const terenoPlugin: Plugin = {
   name: "plugin-tereno",
   // Anonymous init beacon (plugin_initializations). Never blocks startup.
@@ -1202,16 +1038,13 @@ export const terenoPlugin: Plugin = {
     sendTelemetry({ event: "init" });
   },
   description:
-    "Pre-signature security layer for ElizaOS agents on Base: before an agent signs, buy a bounded verdict flagging unlimited approvals, suspicious contracts, unexpected balance changes and abnormal gas. Budget-capped (per-call + daily), fail-closed by default, standardized verdict, dry-run mode.",
+    "Base contract safety, chain reads and prediction-market evidence for ElizaOS agents over x402: buy bounded verdicts and reusable evidence with per-call + daily USDC caps, fail-closed defaults, dry-run mode and seeder reuse dividends.",
   actions: [
-    // Security first: the pre-signature guard is the hero.
-    checkTransaction, checkSwap, checkContract, contractChanged, tokenInfo, contractInterface, chainSnapshot, evidenceArtifactAction, webCompileAction,
-    // Reads that are not guard verdicts: the assurance front (measuring other
-    // people's x402 endpoints) and the obligation verdict.
-    assuranceAction, obligationVerdictAction,
-    // Free helpers.
-    previewAction, catalogAction, opportunitiesAction, pledgeDemandAction,
-    // Advanced / how it stays cheap (cooperative loop).
+    // Active paid capabilities (4 focused capabilities).
+    checkContract, tokenInfo, chainSnapshot, predictionEvidence,
+    // Free verification & discovery helpers.
+    evidenceArtifactAction, previewAction, rulesAction, catalogAction, opportunitiesAction, pledgeDemandAction,
+    // Cooperative loop (seeder dividends, bounties, standing & outcomes).
     bountiesAction, seedAction, standingAction, reportOutcomeAction,
   ],
 };

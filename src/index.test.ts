@@ -6,14 +6,13 @@ import {
   TELEMETRY_KEYS,
   terenoPlugin,
   CAPABILITY_PRICE_USD,
-  ASSURANCE_PRICE_USD,
   DEFAULT_MAX_PRICE_USD,
   DEFAULT_DAILY_BUDGET_USD,
   dearestCapabilityUsd,
   priceLabel,
 } from "./index.ts";
 
-const COST = { capUsd: 0.005, dailySpentUsd: 0.01 };
+const COST = { capUsd: 0.05, dailySpentUsd: 0.01 };
 const BASE = "https://www.tereno.xyz";
 
 const originalEnv = { ...process.env };
@@ -26,14 +25,14 @@ afterEach(() => {
 describe("normalizeVerdict", () => {
   test("allow → sign / risk none", () => {
     const v = normalizeVerdict(
-      { verdict: "allow", result: { summary: "ok" }, pricing: { pricePaidUsd: 0.005 } } as never,
+      { verdict: "allow", result: { summary: "ok" }, pricing: { pricePaidUsd: 0.01 } } as never,
       COST,
       BASE,
     );
     expect(v.decision).toBe("allow");
     expect(v.recommendedAction).toBe("sign");
     expect(v.riskLevel).toBe("none");
-    expect(v.cost.paidUsd).toBe(0.005);
+    expect(v.cost.paidUsd).toBe(0.01);
   });
 
   test("block → abort / risk high", () => {
@@ -100,7 +99,7 @@ describe("failVerdict (fail-open / fail-closed)", () => {
 describe("telemetryPayload (privacy allowlist)", () => {
   test("emits exactly the allowlisted keys, nothing else", () => {
     const p = telemetryPayload(
-      { event: "check", checkType: "transaction.intent.guard", completed: true, paid: true, costUsd: 0.005 },
+      { event: "check", checkType: "contract.guard", completed: true, paid: true, costUsd: 0.01 },
       "deadbeefhash",
       "eip155:8453",
     );
@@ -125,32 +124,37 @@ describe("telemetryPayload (privacy allowlist)", () => {
   });
 });
 
-
 describe("plugin surface", () => {
-  test("exposes the current research and demand actions", () => {
+  test("exposes the 4 active capabilities plus verification, cooperative and demand actions", () => {
     const names = (terenoPlugin.actions ?? []).map((action) => action.name);
-    expect(names).toContain("TERENO_COMPILE_WEB_PAGE");
+    expect(names).toContain("TERENO_CHECK_CONTRACT");
+    expect(names).toContain("TERENO_TOKEN_INFO");
+    expect(names).toContain("TERENO_CHAIN_SNAPSHOT");
+    expect(names).toContain("TERENO_PREDICTION_EVIDENCE");
     expect(names).toContain("TERENO_VERIFY_EVIDENCE");
+    expect(names).toContain("TERENO_RULES");
+    expect(names).toContain("TERENO_BOUNTIES");
+    expect(names).toContain("TERENO_SEED");
     expect(names).toContain("TERENO_OPPORTUNITIES");
     expect(names).toContain("TERENO_PLEDGE_DEMAND");
+    expect(names).not.toContain("TERENO_CHECK_TRANSACTION");
+    expect(names).not.toContain("TERENO_CHECK_SWAP");
+    expect(names).not.toContain("TERENO_COMPILE_WEB_PAGE");
   });
 
   test("dry-run makes a paid action available without a wallet", async () => {
     process.env.TERENO_DRY_RUN = "true";
     delete process.env.TERENO_PRIVATE_KEY;
     delete process.env.EVM_PRIVATE_KEY;
-    const action = (terenoPlugin.actions ?? []).find((item) => item.name === "TERENO_CHECK_TRANSACTION");
+    const action = (terenoPlugin.actions ?? []).find((item) => item.name === "TERENO_CHECK_CONTRACT");
     expect(action).toBeDefined();
-    await expect(action!.validate!({} as never, { content: { text: "{}", source: "discord" } } as never)).resolves.toBe(true);
+    await expect(
+      action!.validate!({} as never, { content: { text: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", source: "discord" } } as never),
+    ).resolves.toBe(true);
   });
 });
 
 // ————— Price drift (the defect that shipped twice) —————
-//
-// 0.3.1 advertised $0.001-0.003 for calls the network charged $0.01-0.03 for,
-// and its own per-call cap then refused every one of them. It compiled, all 14
-// tests passed, and the plugin could not buy anything. Nothing in this file
-// looked at the live catalog, so nothing could tell.
 //
 // These tests read the network. When the network is unreachable they skip with
 // a message rather than fail, so working offline stays possible; CI has network,
@@ -204,28 +208,6 @@ describe("advertised prices match the live network", () => {
     expect(drift).toEqual([]);
   });
 
-  test("the assurance front still lists at the advertised price", async () => {
-    const baseUrl = process.env.TERENO_API_URL?.trim() || "https://www.tereno.xyz";
-    let listed: number | null = null;
-    try {
-      const response = await fetch(`${baseUrl}/api/v1/x402/assurance`, {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (response.ok) {
-        const body = (await response.json()) as { pricing?: { pricePerReportUsd?: number } };
-        listed = body.pricing?.pricePerReportUsd ?? null;
-      }
-    } catch {
-      listed = null;
-    }
-    if (listed === null) {
-      console.warn("[skip] assurance document unreachable; price not checked");
-      return;
-    }
-    expect(listed).toBe(ASSURANCE_PRICE_USD);
-  });
-
   test("a capability the network sells is not silently missing from the plugin", async () => {
     const catalog = await liveCatalog();
     if (!catalog) {
@@ -234,15 +216,13 @@ describe("advertised prices match the live network", () => {
     }
     const missing = catalog.capabilities
       .map((item) => item.id)
-      // tx.preflight is the old alias of transaction.intent.guard.
-      .filter((id) => id !== "tx.preflight" && !(id in CAPABILITY_PRICE_USD));
+      .filter((id) => !(id in CAPABILITY_PRICE_USD));
     expect(missing).toEqual([]);
   });
 });
 
 describe("defaults can actually buy what the plugin advertises", () => {
   test("the default per-call cap covers the dearest check", () => {
-    // The 0.3.1 outage in one line: cap $0.005 against a $0.05 guard.
     expect(DEFAULT_MAX_PRICE_USD).toBeGreaterThanOrEqual(dearestCapabilityUsd());
   });
 
@@ -250,9 +230,11 @@ describe("defaults can actually buy what the plugin advertises", () => {
     expect(DEFAULT_DAILY_BUDGET_USD).toBeGreaterThanOrEqual(DEFAULT_MAX_PRICE_USD * 5);
   });
 
-  test("priceLabel renders a range for tiered reads and a single price for flat ones", () => {
-    expect(priceLabel("contract.guard")).toBe("$0.01-0.03");
-    expect(priceLabel("transaction.intent.guard")).toBe("$0.05");
+  test("priceLabel renders a range for tiered reads", () => {
+    expect(priceLabel("contract.guard")).toBe("$0.02-0.1");
+    expect(priceLabel("token.metadata")).toBe("$0.01-0.03");
+    expect(priceLabel("chain.snapshot")).toBe("$0.002-0.005");
+    expect(priceLabel("prediction.evidence")).toBe("$0.01-0.05");
     expect(priceLabel("nope.not.real")).toBe("price unknown");
   });
 });

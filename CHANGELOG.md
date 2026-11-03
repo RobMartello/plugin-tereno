@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.1
+
+Aligned the ElizaOS plugin with Tereno's focused 4-capability catalog (`contract.guard`, `token.metadata`, `chain.snapshot`, `prediction.evidence`), cooperative rules of engagement (`/agent.md`), and seeder reuse dividend economics.
+
+### Added
+
+- `TERENO_PREDICTION_EVIDENCE` — `prediction.evidence` (`$0.01–$0.05` USDC over x402). Gathers structured, reproducible on-chain and Polymarket evidence for a prediction market question.
+- `TERENO_RULES` — Reads Tereno's cooperative rules of engagement (`/agent.md`): how cache sharing saves up to 80% on compute and how seeders earn 20% reuse dividends on open bounties.
+
+### Changed
+
+- Updated `CAPABILITY_PRICE_USD` and `DEFAULT_MAX_PRICE_USD` (`0.1`) to match the live 4-capability catalog (`contract.guard` `$0.02–$0.10`, `token.metadata` `$0.01–$0.03`, `chain.snapshot` `$0.002–$0.005`, `prediction.evidence` `$0.01–$0.05`).
+- `TERENO_SEED` now fulfills payable bounties across `token.metadata`, `chain.snapshot` and `prediction.evidence` in addition to free signed fingerprint publishing for `contract.guard`.
+- Action descriptions and `TERENO_PREVIEW` now explicitly state seeder reuse dividend economics (`20%` / `$0.002` per cross-wallet reuse).
+
+### Removed
+
+- Removed actions for capabilities retired in the 2026-09-20 catalog prune (`TERENO_CHECK_TRANSACTION`, `TERENO_CHECK_SWAP`, `TERENO_CONTRACT_CHANGED`, `TERENO_CONTRACT_INTERFACE`, `TERENO_COMPILE_WEB_PAGE`, `TERENO_OBLIGATION_VERDICT`, `TERENO_CHECK_X402_ENDPOINT`), which now return `410 capability_retired` on the network.
+
 ## 0.4.0
 
 Two independent outages, both silent: the plugin compiled, every test passed and

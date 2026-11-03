@@ -4,11 +4,10 @@
 
 # plugin-tereno
 
-### 🛡️ A pre-signature security layer for ElizaOS agents on Base
+### 🛡️ Base contract safety, chain reads & prediction-market evidence for ElizaOS agents
 
-**Before your agent signs, it checks.** One paid call flags unlimited approvals,
-suspicious contracts, unexpected balance changes and abnormal gas — and returns
-a single, standardized verdict your agent can branch on.
+**Before your agent acts, it checks — and when other agents reuse its work, it earns.**
+Buy bounded on-chain verdicts and prediction evidence over x402 (`contract.guard`, `token.metadata`, `chain.snapshot`, `prediction.evidence`), returning a single standardized verdict your agent can branch on.
 
 <br/>
 
@@ -52,39 +51,32 @@ The Tereno backend, databases, caches, internal routes and secrets are **not** d
 
 ## ⚡ Why this exists
 
-Autonomous agents sign transactions with no instinct for danger. One malicious
-approval, one drainer contract, one rug-after-audit, and the wallet is gone.
+Autonomous agents interact with Base contracts and prediction markets with no shared verification memory.
 
-`plugin-tereno` gives an ElizaOS agent a **pre-signature check**: before it signs
-a Base transaction, it buys a bounded verdict from [Tereno](https://www.tereno.xyz)
-that simulates the call and flags the ways it could lose funds. **Failed calls are
-never charged** — x402 settles only after a successful response.
+`plugin-tereno` gives an ElizaOS agent a **bounded verification & shared-cache layer**: before it touches a Base contract or acts on a prediction market question, it buys a structured verdict from [Tereno](https://www.tereno.xyz). **Failed calls are never charged** — x402 settles only after a successful response.
 
-- **No API key, no signup.** The agent's wallet *is* the identity; it pays a few
-  cents per check in USDC over x402.
-- **Budget-capped.** Per-call and rolling-daily USDC limits — a chatty agent can't
-  drain its wallet.
-- **Fail-closed by default.** If the check can't complete, a financial action is
-  told to **abort**, not to sign blind.
+- **No API key, no signup.** The agent's wallet *is* the identity; it pays `$0.01–$0.05` per check in USDC over x402.
+- **Budget-capped.** Per-call and rolling-daily USDC limits — a chatty agent can't drain its wallet.
+- **Fail-closed by default.** If a financial check can't complete, the action recommends **abort**, not signing blind.
+- **Seeder reuse dividends.** The first settled payer (or free audited fingerprint publisher for `contract.guard`) becomes the artifact's seeder and earns 20% of later settled cross-wallet reuses (`$0.002` per reuse) in non-transferable credits.
 
-## 🚦 The core check
+## 🚦 The standardized verdict
 
 ```
-TERENO_CHECK_TRANSACTION
-{"from":"0x…","to":"0x…","data":"0x…","value":"0"}
+TERENO_CHECK_CONTRACT  0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
       │
       ▼
   decision · riskLevel · reason · exposure · cost · recommendedAction
 ```
 
-Every guard action returns the **same standardized verdict**:
+Every paid capability action returns the **same standardized verdict**:
 
 ```ts
 interface TerenoVerdict {
   decision: "allow" | "review" | "block";
   riskLevel: "none" | "low" | "medium" | "high";
   reason: string;                       // human-readable summary + reason codes
-  exposure: {                           // what the tx would change
+  exposure: {
     balanceDeltas?: unknown;
     allowanceChanges?: unknown;
     unlimitedApproval: boolean;
@@ -98,21 +90,18 @@ interface TerenoVerdict {
 
 Your agent branches on one field: `recommendedAction`.
 
-## 🔍 What it checks
+## 🔍 What it covers
 
-| Action | Price | The question it answers |
+| Action | Price (hit–miss) | The question it answers |
 |---|---:|---|
-| 🚦 `TERENO_CHECK_TRANSACTION` | $0.05 | **Is this safe to sign?** Simulation, gas, balance/allowance deltas, drainer & unlimited-approval flags |
-| 🔁 `TERENO_CHECK_SWAP` | $0.05 | Will this prepared Aerodrome swap still satisfy its own encoded limit? |
-| 🛡️ `TERENO_CHECK_CONTRACT` | $0.01–0.03 | Is this contract safe to interact with? (code, proxy, pause) |
-| 🕵️ `TERENO_CONTRACT_CHANGED` | $0.01–0.02 | Did it change since last look? (rug-pull-after-audit detector) |
-| 🪙 `TERENO_TOKEN_INFO` | $0.01–0.03 | What token is this, really? (name, symbol, decimals, supply) |
-| 🧬 `TERENO_CONTRACT_INTERFACE` | $0.01–0.02 | ERC-20? NFT? Proxy? One bounded probe |
-| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.002–0.005 | Latest Base block + gas, zero parameters |
-| 📄 `TERENO_COMPILE_WEB_PAGE` | $0.02–0.03 | Public URL → bounded Markdown, resolved links, citations and reusable artifact |
-| 🔬 `TERENO_CHECK_X402_ENDPOINT` | $0.03 | Is another x402 endpoint callable, well-formed and unchanged since last look? |
-| ⚖️ `TERENO_OBLIGATION_VERDICT` | $0.001 | Was a published economic condition satisfied? |
+| 🛡️ `TERENO_CHECK_CONTRACT` | $0.02–0.10 | **Is this Base contract safe to touch?** (code present, EIP-1967 proxy implementation/admin, paused state) |
+| 🪙 `TERENO_TOKEN_INFO` | $0.01–0.03 | What token is this, really? (`name`, `symbol`, `decimals`, `totalSupply`) |
+| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.002–0.005 | Latest Base block, timestamp, base fee and suggested priority fee |
+| 🎯 `TERENO_PREDICTION_EVIDENCE` | $0.01–0.05 | Structured on-chain + Polymarket evidence brief for a prediction market question |
+| 📜 `TERENO_RULES` | free | Read cooperative rules of engagement (/agent.md): cache discounts ($0.01), 20% seeder dividends & artifact sharing |
 | 🔎 `TERENO_VERIFY_EVIDENCE` | free | Read a public artifact reference, validity and recomputation input |
+| 🌱 `TERENO_BOUNTIES` / `TERENO_SEED` | free / $0.005–0.05 | Inspect open network demand and seed it (free signed fingerprint or first settled payer) to earn 20% reuse dividends |
+| 🏅 `TERENO_STANDING` / `TERENO_REPORT_OUTCOME` | free | Check publisher standing, earned credits, and attach signed outcomes |
 | 📈 `TERENO_OPPORTUNITIES` | free | Aggregate unmet agent asks — research signal, not traction |
 | 🤝 `TERENO_PLEDGE_DEMAND` | free | Explicit intent to buy a named future capability; credit only after same-wallet paid proof |
 | 🧾 `TERENO_PREVIEW` | free | What the checks cover, cost and current config |
@@ -120,9 +109,7 @@ Your agent branches on one field: `recommendedAction`.
 
 > Prices are asserted against the live network by `bun test`, not maintained by
 > hand. They live in one table (`CAPABILITY_PRICE_USD` in `src/index.ts`); if the
-> network changes a price and this table does not, CI fails. Before 0.4.0 this
-> table did not exist and the advertised prices drifted 10× behind the network,
-> which put every paid check above the plugin's own per-call cap.
+> network changes a price and this table does not, CI fails.
 
 ## 🚀 Quickstart (free, no wallet needed)
 
@@ -138,7 +125,7 @@ TERENO_NETWORK=eip155:8453   # Base mainnet
 ```ts
 import { terenoPlugin } from "plugin-tereno";
 // add terenoPlugin to your ElizaOS character's plugins, then ask the agent:
-//   is it safe to sign {"from":"0x…","to":"0x…","data":"0x…"}?
+//   is contract 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 safe?
 // → returns a TerenoVerdict with recommendedAction, no USDC spent.
 ```
 
@@ -159,11 +146,6 @@ TERENO_FAIL_MODE=closed       # financial checks abort if the guard can't answer
 > configured with `X402_NETWORK=eip155:84532` (self-host) and set
 > `TERENO_NETWORK=eip155:84532`. Dry-run works on any network with no wallet.
 
-Then just talk to your agent:
-
-> **you:** is it safe to sign this? `{"from":"0x…","to":"0x…","data":"0x095ea7b3…"}`
-> **agent:** ⛔ BLOCK · risk high · → abort — UNLIMITED_ALLOWANCE: the spender gets max approval. Paid $0.05 · receipt attached.
-
 ## ⚙️ Configuration
 
 | Env | Default | Purpose |
@@ -183,11 +165,11 @@ Then just talk to your agent:
 ### Fail-open vs fail-closed
 
 - **`closed` (default, for financial actions):** if the guard errors, times out, or
-  the daily budget is spent, `TERENO_CHECK_TRANSACTION` returns
-  `recommendedAction: "abort"`. The agent does **not** sign what it couldn't verify.
+  the daily budget is spent, `TERENO_CHECK_CONTRACT` returns
+  `recommendedAction: "abort"`. The agent does **not** interact with what it couldn't verify.
 - **`open`:** the same situations degrade to `recommendedAction: "review"`. Even
   open mode never returns `"sign"` on a failed check — a human or policy decides.
-- Non-financial reads (token/chain/interface) always degrade to `review`.
+- Non-financial reads (token/chain/prediction evidence) always degrade to `review`.
 
 ## 🔐 Privacy & telemetry
 
@@ -201,51 +183,26 @@ allowlist to help improve the network: plugin version, a **hashed** wallet
 was paid, its USD cost, cache-hit, a repeat flag, and an integration-error flag.
 Nothing else. See [`SECURITY.md`](./SECURITY.md).
 
----
-
-## 📄 Research and demand signals
-
-The plugin also gives a research agent a safe way to use the Tereno network without changing the pre-signature default:
-
-- **TERENO_COMPILE_WEB_PAGE** turns one public URL into bounded Markdown with resolved links, citations and a content-addressed artifact. It is $0.03 for a fresh compile and $0.02 while the same page remains fresh.
-- **TERENO_VERIFY_EVIDENCE** reads the free provenance and recomputation reference of a public artifact. It never exposes private transaction intent, paid output or payer identity. Set `TERENO_EVIDENCE_INSTALLATION_ID` to a stable random value if you want this installation to count once per artifact/day in the circulation experiment.
-- **TERENO_OPPORTUNITIES** shows aggregate unmet asks. It is explicitly a research signal, not a reward pool or proof of demand.
-- **TERENO_PLEDGE_DEMAND** is available only after an explicit request and a configured wallet. A pledge earns nothing at submission; only a later settlement by that same wallet can release a bounded, non-transferable credit.
-
-TERENO_DRY_RUN=true accepts both safety and research inputs without a wallet, fetch or x402 payment, so an ElizaOS builder can verify action selection before enabling spend.
-
-## 🌱 How it stays cheap — the cooperative layer (advanced)
+## 🌱 How it stays cheap — the cooperative layer
 
 Tereno is a **shared-cache coordination layer**, not just an API. The first agent
-to pay for a given piece of verified work *seeds* it for the whole network; every
-later agent that reuses that answer pays less, and the seeder earns a small,
-non-transferable credit that discounts its own future checks.
+to pay for a given piece of verified work (or publish a signed, audited contract
+fingerprint) *seeds* it for the whole network; every later agent that reuses that
+answer pays the `$0.01` cache-hit price, and the seeder earns `20%` (`$0.002`) of
+each settled cross-wallet reuse in non-transferable credits that discount its own
+future calls:
 
-The game theory: safety is a public good with a private cost. By making the first
-computation earn from every reuse, the network turns *"I paid to check this
-contract"* into *"I lowered the price of checking it for everyone, and my own
-checks got cheaper."* More agents ⇒ deeper cache ⇒ cheaper, faster verdicts ⇒
-more agents.
-
-Advanced actions expose this loop — you never need them to use the security
-checks above:
+- `contract.guard`: `$0.002`/reuse (lifetime cap `$0.15`, or `$0.18` when published via free audited EIP-712 fingerprint)
+- `token.metadata`: `$0.002`/reuse (lifetime cap `$0.15`)
+- `chain.snapshot`: `$0.002`/reuse (lifetime cap `$0.10`)
+- `prediction.evidence`: `$0.002`/reuse (lifetime cap `$0.25`)
 
 | Action | Cost | What it does |
 |---|---:|---|
 | `TERENO_BOUNTIES` | free | See the work the network will pay to have seeded next |
-| `TERENO_SEED` | free/$0.02–0.03 | Seed a bounty (publish a signed fingerprint for free, or pay to be first payer) |
+| `TERENO_SEED` | free / $0.02–0.05 | Seed a bounty (publish a signed fingerprint for free, or pay to be first payer) |
 | `TERENO_STANDING` | free | The agent's audited track record and earned credits |
 | `TERENO_REPORT_OUTCOME` | free | Attach a signed outcome to a settled verdict |
-
-> The honest fine print: rewards are **non-transferable credits**, capped per
-> artifact — they fund your agent's safety budget, they are not yield. Reputation
-> is computed by the network from recomputation audits and settled economics,
-> never from claims.
-
-Discovery, scoring, reputation, pricing, the global cache and cooperation logic
-live in the **closed Tereno backend**. This plugin and its SDK
-([`tereno-client`](https://www.npmjs.com/package/tereno-client)) are the public,
-open interface to it.
 
 ## 🤝 Support & community
 
@@ -264,6 +221,6 @@ open interface to it.
 
 <div align="center">
 
-**[tereno.xyz](https://www.tereno.xyz)** · Verdicts before signatures, for agents on Base.
+**[tereno.xyz](https://www.tereno.xyz)** · Shared verification and evidence for agents on Base.
 
 </div>
