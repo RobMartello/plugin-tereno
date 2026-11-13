@@ -95,9 +95,12 @@ Your agent branches on one field: `recommendedAction`.
 | Action | Price (hit–miss) | The question it answers |
 |---|---:|---|
 | 🛡️ `TERENO_CHECK_CONTRACT` | $0.02–0.10 | **Is this Base contract safe to touch?** (code present, EIP-1967 proxy implementation/admin, paused state) |
+| 🚀 `TERENO_TOKEN_LAUNCH_GUARD` | $0.02–0.07 | **Can I get out after I get in?** Simulates sell/exit via `eth_call`, verifies DEX LP depth and burn/lock status, checks owner powers (honeypot, mint, fee traps) |
+| 👥 `TERENO_TOKEN_HOLDERS_GUARD` | $0.01–0.04 | **Who controls this token?** Top 10 holder concentration and deployer-funded cabal Sybil clusters via ETH funding origin graphs |
 | 🪙 `TERENO_TOKEN_INFO` | $0.01–0.03 | What token is this, really? (`name`, `symbol`, `decimals`, `totalSupply`) |
 | ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.002–0.005 | Latest Base block, timestamp, base fee and suggested priority fee |
 | 🎯 `TERENO_PREDICTION_EVIDENCE` | $0.01–0.05 | Structured on-chain + Polymarket evidence brief for a prediction market question |
+| ⚖️ `TERENO_ACP_EVALUATE` | free / open | **Evaluate ERC-8183 Agent Escrow tasks**: audits task delivery, returns EIP-712 `SignedVerdictProof`, score (0-100), and ERC-8004 validation link for on-chain escrow release |
 | 📜 `TERENO_RULES` | free | Read cooperative rules of engagement (/agent.md): cache discounts ($0.01), 20% seeder dividends & artifact sharing |
 | 🔎 `TERENO_VERIFY_EVIDENCE` | free | Read a public artifact reference, validity and recomputation input |
 | 🌱 `TERENO_BOUNTIES` / `TERENO_SEED` | free / $0.005–0.05 | Inspect open network demand and seed it (free signed fingerprint or first settled payer) to earn 20% reuse dividends |

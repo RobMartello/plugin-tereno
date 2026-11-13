@@ -28,6 +28,14 @@ type PluginCapabilityInput =
       question: string;
       market?: string;
       marketUrl?: string;
+    }
+  | {
+      capabilityId: "token.launch.guard";
+      address: string;
+    }
+  | {
+      capabilityId: "token.holders.guard";
+      address: string;
     };
 
 const ADDRESS_RE = /0x[a-fA-F0-9]{40}/;
@@ -72,6 +80,8 @@ export const CAPABILITY_PRICE_USD: Record<string, { hit: number; miss: number }>
   "token.metadata": { hit: 0.01, miss: 0.03 },
   "chain.snapshot": { hit: 0.002, miss: 0.005 },
   "prediction.evidence": { hit: 0.01, miss: 0.05 },
+  "token.launch.guard": { hit: 0.02, miss: 0.07 },
+  "token.holders.guard": { hit: 0.01, miss: 0.04 },
 };
 
 /** "$0.01-0.03" for a tiered read, "$0.05" for a flat one. */
@@ -576,6 +586,146 @@ const predictionEvidence = paidAction({
     "I need a prediction market question (at least 5 characters, optionally with a Polymarket URL) to gather evidence.",
 });
 
+const tokenLaunchGuard = paidAction({
+  name: "TERENO_TOKEN_LAUNCH_GUARD",
+  similes: [
+    "CHECK_HONEYPOT",
+    "CAN_I_SELL",
+    "TOKEN_LAUNCH_GUARD",
+    "VERIFY_LP_LOCK",
+    "EXIT_SIMULATION",
+    "SIMULATE_TOKEN_EXIT",
+  ],
+  description:
+    `Can I get out after I get in? Before buying or swapping a Base token, simulate a real sell/exit via eth_call, verify DEX LP reserve depth, check burn/lock status, and inspect owner powers (blacklist, mint, fee traps) via Tereno token.launch.guard (${priceLabel("token.launch.guard")} USDC over x402). Critical financial safety check before swaps or buying new Base tokens.`,
+  buildInput: (message) => {
+    const address = firstAddress(message);
+    return address ? { capabilityId: "token.launch.guard", address } : null;
+  },
+  missingInputText: "I need a Base token address (0x…) to run the token launch and exit simulation guard.",
+  financial: true,
+});
+
+const tokenHoldersGuard = paidAction({
+  name: "TERENO_TOKEN_HOLDERS_GUARD",
+  similes: [
+    "CHECK_TOKEN_HOLDERS",
+    "TOKEN_HOLDERS_GUARD",
+    "DETECT_CABAL",
+    "CHECK_SYBIL_CLUSTERS",
+    "HOLDER_CONCENTRATION",
+    "INSIDER_DUMP_RISK",
+  ],
+  description:
+    `Who controls this token? Inspect Base token holder concentration (top 10 holders excluding DEX/burn) and trace ETH funding origins to uncover deployer-funded cabal Sybil clusters via Tereno token.holders.guard (${priceLabel("token.holders.guard")} USDC over x402). Financial action.`,
+  buildInput: (message) => {
+    const address = firstAddress(message);
+    return address ? { capabilityId: "token.holders.guard", address } : null;
+  },
+  missingInputText: "I need a Base token address (0x…) to inspect holder concentration and cabal clusters.",
+  financial: true,
+});
+
+interface AcpEvaluationResponse {
+  jobId: string;
+  verdict: "allow" | "review" | "block";
+  score: number;
+  escrowReleaseEligible: boolean;
+  summary: string;
+  reasonCodes: string[];
+  erc8004ValidationUrl?: string;
+  signedProof?: {
+    signature: string;
+    hash: string;
+    signer: string;
+  };
+}
+
+async function evaluateAcpEscrow(params: {
+  jobId: string;
+  targetAddress: string;
+  taskType: "contract_safety" | "token_launch_safety" | "token_holders_concentration";
+  clientAddress?: string;
+  providerAddress?: string;
+}): Promise<AcpEvaluationResponse> {
+  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/api/acp/evaluate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(
+      typeof (data as Record<string, unknown>).error === "string"
+        ? ((data as Record<string, unknown>).error as string)
+        : `ACP evaluation failed (${response.status})`
+    );
+  }
+  return data as AcpEvaluationResponse;
+}
+
+const acpEvaluateAction: Action = {
+  name: "TERENO_ACP_EVALUATE",
+  similes: [
+    "EVALUATE_TASK_ESCROW",
+    "CHECK_ACP_ESCROW",
+    "ACP_EVALUATE",
+    "VERIFY_TASK_RELEASE",
+    "AUDIT_AGENT_ESCROW",
+  ],
+  description:
+    "Evaluate an ERC-8183 Agent Escrow (ACP) task delivery via Tereno. Verifies target address safety (contract_safety, token_launch_safety, or token_holders_concentration) and returns an EIP-712 SignedVerdictProof, score (0-100), escrowReleaseEligible flag, and ERC-8004 validation link for on-chain escrow release or dispute.",
+  validate: async () => true,
+  handler: async (_runtime, message, _state, _options, callback): Promise<ActionResult> => {
+    const respond = async (text: string, success: boolean, data?: unknown): Promise<ActionResult> => {
+      await callback?.({ text, actions: ["TERENO_ACP_EVALUATE"], source: message.content.source });
+      return { success, text, data: data as Record<string, unknown> | undefined };
+    };
+
+    const text = message.content.text || "";
+    const address = firstAddress(message);
+    if (!address) {
+      return respond("I need a target Base contract or token address (0x…) to evaluate the ACP escrow task.", false);
+    }
+
+    const jobMatch = text.match(/\b(job-[a-zA-Z0-9_-]+|task-[a-zA-Z0-9_-]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
+    const jobId = jobMatch ? jobMatch[1] : `task-${Date.now().toString(36)}`;
+
+    let taskType: "contract_safety" | "token_launch_safety" | "token_holders_concentration" = "token_launch_safety";
+    if (/holder|cabal|cluster|concentration/i.test(text)) {
+      taskType = "token_holders_concentration";
+    } else if (/contract|bytecode|proxy/i.test(text)) {
+      taskType = "contract_safety";
+    }
+
+    try {
+      const evaluation = await evaluateAcpEscrow({
+        jobId,
+        targetAddress: address,
+        taskType,
+      });
+
+      const icon = evaluation.escrowReleaseEligible ? "✅" : "⛔";
+      const status = evaluation.escrowReleaseEligible ? "RELEASE ELIGIBLE" : "DISPUTE RECOMMENDED";
+      const lines = [
+        `${icon} ERC-8183 ACP Task Evaluation: ${status} (Score: ${evaluation.score}/100)`,
+        `Job ID: ${evaluation.jobId} · Task: ${taskType}`,
+        `Verdict: ${evaluation.verdict.toUpperCase()} · ${evaluation.summary}`,
+        evaluation.reasonCodes.length > 0 ? `Reason Codes: ${evaluation.reasonCodes.join(", ")}` : null,
+        evaluation.signedProof ? `Signed EIP-712 Proof: ${evaluation.signedProof.hash}` : null,
+        evaluation.erc8004ValidationUrl ? `ERC-8004 Validation: ${evaluation.erc8004ValidationUrl}` : null,
+      ].filter(Boolean).join("\n");
+
+      return respond(lines, true, evaluation);
+    } catch (error) {
+      return respond(`ACP evaluation error: ${error instanceof Error ? error.message : String(error)}`, false);
+    }
+  },
+  examples: [],
+};
+
 const evidenceArtifactAction: Action = {
   name: "TERENO_VERIFY_EVIDENCE",
   similes: ["VERIFY_TERENO_ARTIFACT", "CHECK_EVIDENCE_PROVENANCE", "RECOMPUTE_EVIDENCE"],
@@ -1038,12 +1188,12 @@ export const terenoPlugin: Plugin = {
     sendTelemetry({ event: "init" });
   },
   description:
-    "Base contract safety, chain reads and prediction-market evidence for ElizaOS agents over x402: buy bounded verdicts and reusable evidence with per-call + daily USDC caps, fail-closed defaults, dry-run mode and seeder reuse dividends.",
+    "Pre-action safety, honeypot exit simulation, cabal holder clusters, chain reads, prediction evidence and ERC-8183 escrow evaluations for ElizaOS agents over x402 on Base: bounded verdicts, fail-closed defaults and seeder reuse dividends.",
   actions: [
-    // Active paid capabilities (4 focused capabilities).
-    checkContract, tokenInfo, chainSnapshot, predictionEvidence,
+    // Active paid capabilities (6 canonical capabilities).
+    checkContract, tokenInfo, chainSnapshot, predictionEvidence, tokenLaunchGuard, tokenHoldersGuard,
     // Free verification & discovery helpers.
-    evidenceArtifactAction, previewAction, rulesAction, catalogAction, opportunitiesAction, pledgeDemandAction,
+    evidenceArtifactAction, acpEvaluateAction, previewAction, rulesAction, catalogAction, opportunitiesAction, pledgeDemandAction,
     // Cooperative loop (seeder dividends, bounties, standing & outcomes).
     bountiesAction, seedAction, standingAction, reportOutcomeAction,
   ],

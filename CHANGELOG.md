@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0
+
+Expanded plugin-tereno to support the 6 canonical Tereno capabilities and the ERC-8183 Agent Escrow (ACP) evaluator standard.
+
+### Added
+
+- `TERENO_TOKEN_LAUNCH_GUARD` — `token.launch.guard` (`$0.02–$0.07` USDC over x402). Simulates sell/exit via `eth_call`, checks DEX LP reserves depth and burn/lock status, and inspects owner powers (honeypot, mint, fee traps).
+- `TERENO_TOKEN_HOLDERS_GUARD` — `token.holders.guard` (`$0.01–$0.04` USDC over x402). Analyzes top 10 holder concentration (excluding LP & burn) and traces ETH funding origins to uncover deployer-funded cabal Sybil clusters.
+- `TERENO_ACP_EVALUATE` — Evaluates ERC-8183 Agent Escrow tasks via Tereno's Evaluator adapter (`POST /api/acp/evaluate`). Returns EIP-712 `SignedVerdictProof`, score (0-100), `escrowReleaseEligible` flag, and permanent ERC-8004 validation document link.
+
+### Changed
+
+- Updated `CAPABILITY_PRICE_USD` to cover all 6 canonical capabilities.
+- Compiled `dist/` with updated TypeScript types and actions.
+
 ## 0.5.1
 
 Aligned the ElizaOS plugin with Tereno's focused 4-capability catalog (`contract.guard`, `token.metadata`, `chain.snapshot`, `prediction.evidence`), cooperative rules of engagement (`/agent.md`), and seeder reuse dividend economics.

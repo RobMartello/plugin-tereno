@@ -1,7 +1,7 @@
 {
   "name": "plugin-tereno",
-  "version": "0.5.1",
-  "description": "Base contract safety, chain reads and prediction-market evidence for ElizaOS agents over x402: buy bounded verdicts (contract.guard, token.metadata, chain.snapshot, prediction.evidence) with per-call + daily USDC caps, fail-closed defaults, dry-run mode and seeder reuse dividends.",
+  "version": "0.6.0",
+  "description": "Pre-action safety, honeypot exit simulation, cabal holder clusters, chain reads, prediction evidence and ERC-8183 escrow evaluations for ElizaOS agents over x402 on Base: buy bounded verdicts (contract.guard, token.metadata, chain.snapshot, prediction.evidence, token.launch.guard, token.holders.guard) with per-call + daily USDC caps, fail-closed defaults, dry-run mode and seeder reuse dividends.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
