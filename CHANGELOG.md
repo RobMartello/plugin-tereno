@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+- Bumped `tereno-client` dependency to `^0.5.1` to pick up the EIP-712 `publishContractFingerprint` resource fix and default 15s HTTP request timeout for cold Base simulations + x402 settlement.
+- Updated `PLUGIN_VERSION` to `0.6.1`.
+
 ## 0.6.0
 
 Expanded plugin-tereno to support the 6 canonical Tereno capabilities and the ERC-8183 Agent Escrow (ACP) evaluator standard.
