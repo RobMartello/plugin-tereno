@@ -19,7 +19,8 @@ import { createHash } from "node:crypto";
 import { createPublicClient, http, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
-import { createTerenoClient, type CapabilityInput } from "tereno-client";
+import { PaidCalls, TerenoBudgetError } from "./paid-calls.js";
+import { createTerenoClient, TerenoPaymentPendingError, type CapabilityInput } from "tereno-client";
 
 type PluginCapabilityInput =
   | CapabilityInput
@@ -76,9 +77,9 @@ function maxPriceUsd(): number {
  *  the live network, so the next price change fails CI instead of shipping.
  */
 export const CAPABILITY_PRICE_USD: Record<string, { hit: number; miss: number }> = {
-  "contract.guard": { hit: 0.02, miss: 0.1 },
+  "contract.guard": { hit: 0.01, miss: 0.03 },
   "token.metadata": { hit: 0.01, miss: 0.03 },
-  "chain.snapshot": { hit: 0.002, miss: 0.005 },
+  "chain.snapshot": { hit: 0.01, miss: 0.02 },
   "prediction.evidence": { hit: 0.01, miss: 0.05 },
   "token.launch.guard": { hit: 0.02, miss: 0.07 },
   "token.holders.guard": { hit: 0.01, miss: 0.04 },
@@ -169,7 +170,7 @@ export function failVerdict(reason: string, financial: boolean): TerenoVerdict {
 // ————— Anonymous telemetry (issues #9/#10) —————
 // Opt-out (TERENO_TELEMETRY=off). STRICT allowlist below — this is the ONLY
 // data ever transmitted. Never the private key, prompt, secrets or tx content.
-const PLUGIN_VERSION = "0.6.1";
+const PLUGIN_VERSION = "0.6.2";
 
 function telemetryEnabled(): boolean {
   return env("TERENO_TELEMETRY").toLowerCase() !== "off";
@@ -269,6 +270,38 @@ function client() {
     rpcUrl: env("TERENO_RPC_URL", "https://mainnet.base.org"),
     maxPriceUsd: maxPriceUsd(),
   });
+}
+
+const paidCalls = new PaidCalls(underDailyBudget, (result, reservation) => {
+  underDailyBudget(0); // Refresh the UTC budget day before accounting.
+  const value = (result.data as VerdictResult)?.pricing?.pricePaidUsd;
+  spentTodayUsd += typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : reservation;
+});
+
+let pendingSeed: { input: PluginCapabilityInput; key: string } | null = null;
+
+function paidFingerprint(input: PluginCapabilityInput) {
+  const key = privateKey();
+  if (!key) throw new Error("TERENO_PRIVATE_KEY (or EVM_PRIVATE_KEY) is not configured");
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    wallet: privateKeyToAccount(key).address,
+    url: env("TERENO_API_URL", "https://www.tereno.xyz").replace(/\/+$/, ""),
+    network: env("TERENO_NETWORK", "eip155:8453"),
+    input: Object.fromEntries(Object.entries(input).sort(([a], [b]) => a.localeCompare(b))),
+  })).digest("hex");
+  return fingerprint;
+}
+
+async function invokePaid(input: PluginCapabilityInput, reservation: number) {
+  const fingerprint = paidFingerprint(input);
+  try {
+    const result = await paidCalls.invoke(fingerprint, reservation, () => client().invokeCapability<VerdictResult>(input as CapabilityInput));
+    if (pendingSeed?.key === fingerprint) pendingSeed = null;
+    return result;
+  } catch (error) {
+    if (!(error instanceof TerenoPaymentPendingError) && pendingSeed?.key === fingerprint) pendingSeed = null;
+    throw error;
+  }
 }
 
 function firstAddress(message: Memory): string | null {
@@ -371,7 +404,7 @@ export interface TerenoVerdict {
     allowanceChanges?: unknown;
     unlimitedApproval: boolean;
   };
-  cost: { paidUsd: number; capUsd: number; dailySpentUsd: number };
+  cost: { paidUsd: number; capUsd: number; dailySpentUsd: number; paymentStatus?: "pending" };
   recommendedAction: RecommendedAction;
   receiptUrl: string | null;
   raw: VerdictResult;
@@ -440,7 +473,7 @@ function formatVerdict(v: TerenoVerdict): string {
     `${icon} Tereno: ${v.decision.toUpperCase()} · risk ${v.riskLevel} · → ${v.recommendedAction}`,
     v.reason,
     v.exposure.unlimitedApproval ? "⚠️ unlimited approval detected" : null,
-    `Paid: $${v.cost.paidUsd} USDC (x402) · cap $${v.cost.capUsd}/call · $${v.cost.dailySpentUsd.toFixed(3)} today`,
+    `Payment: ${v.cost.paymentStatus === "pending" ? "pending confirmation; budget remains reserved" : `$${v.cost.paidUsd} USDC (x402)`} · cap $${v.cost.capUsd}/call · $${v.cost.dailySpentUsd.toFixed(3)} today`,
     v.receiptUrl ? `Receipt: ${v.receiptUrl}` : null,
   ];
   return lines.filter(Boolean).join("\n");
@@ -488,30 +521,17 @@ function paidAction(config: {
         return respond(`🧪 ${formatVerdict(v)}`, true, v);
       }
 
-      if (!underDailyBudget(perCall)) {
-        sendTelemetry({
-          event: "check",
-          checkType: input.capabilityId,
-          completed: false,
-          paid: false,
-          error: "budget_exhausted",
-        });
-        const v = failVerdict("daily USDC budget exhausted", financial);
-        return respond(formatVerdict(v), false, v);
-      }
       try {
-        const tereno = client();
-        const { data } = await tereno.invokeCapability<VerdictResult>(input as CapabilityInput);
+        const { result: { data }, newlyAccounted } = await invokePaid(input, perCall);
         const paid = data.pricing?.pricePaidUsd ?? perCall;
-        spentTodayUsd += paid;
         const repeat = paidCallCount > 0;
-        paidCallCount += 1;
+        if (newlyAccounted) paidCallCount += 1;
         sendTelemetry({
           event: "check",
           checkType: input.capabilityId,
           completed: true,
-          paid: true,
-          costUsd: paid,
+          paid: newlyAccounted,
+          costUsd: newlyAccounted ? paid : 0,
           cacheHit: readCacheHit(data),
           repeat,
           error: null,
@@ -530,11 +550,13 @@ function paidAction(config: {
           checkType: input.capabilityId,
           completed: false,
           paid: false,
-          error: "integration_error",
+          error: error instanceof TerenoPaymentPendingError ? "payment_pending" : error instanceof TerenoBudgetError ? "budget_exhausted" : "integration_error",
         });
-        // Nothing was charged (x402 settles only on success). Fail-mode decides
-        // whether a financial action aborts or degrades to review.
-        const v = failVerdict(`guard unavailable: ${reason}`, financial);
+        const pending = error instanceof TerenoPaymentPendingError;
+        const v = failVerdict(pending
+          ? "Payment outcome pending. Retry the SAME action and input to resume the original authorization; do not create another payment or restart the process while unresolved."
+          : `guard unavailable: ${reason}`, financial);
+        if (pending) v.cost.paymentStatus = "pending";
         return respond(formatVerdict(v), false, v);
       }
     },
@@ -966,6 +988,16 @@ const seedAction: Action = {
       return { success, text, data: data as Record<string, unknown> | undefined };
     };
     try {
+      // Resume before refreshing bounties: a lost acknowledgement may already
+      // have fulfilled the original bounty, removing it from the open queue.
+      if (pendingSeed) {
+        const pending = pendingSeed;
+        if (paidFingerprint(pending.input) !== pending.key) {
+          return respond("A seeding payment is pending for the original wallet/network/API. Restore that configuration to reconcile it before starting another.", false);
+        }
+        const { result: { data } } = await invokePaid(pending.input, maxPriceUsd());
+        return respond(`Recovered the original ${pending.input.capabilityId} seeding result. No new payment authorization was created. Receipt: ${data.receiptUrl ?? data.invocationId ?? "see result"}`, true, data);
+      }
       // Explicit address wins: seed that contract via the free publish path.
       const explicit = firstAddress(message);
       if (explicit) return respond(await seedByPublishing(explicit), true);
@@ -983,11 +1015,8 @@ const seedAction: Action = {
 
       const input = bountyToCapabilityInput(payable)!;
       const seedCostUsd = CAPABILITY_PRICE_USD[payable.capabilityId]?.miss ?? DEFAULT_MAX_PRICE_USD;
-      if (!underDailyBudget(seedCostUsd)) {
-        return respond("Found a payable bounty, but the daily USDC budget is exhausted.", false);
-      }
-      const { data } = await client().invokeCapability<VerdictResult>(input as CapabilityInput);
-      spentTodayUsd += data.pricing?.pricePaidUsd ?? seedCostUsd;
+      pendingSeed = { input, key: paidFingerprint(input) };
+      const { result: { data } } = await invokePaid(input, Math.max(seedCostUsd, maxPriceUsd()));
       const target = payable.input.address ?? payable.input.question ?? payable.capabilityId;
       return respond(
         `🌱 Paid $${data.pricing?.pricePaidUsd ?? seedCostUsd} to seed ${payable.capabilityId} (${target}). As first settled payer I claimed the seeder slot: every settled reuse by another wallet now pays me $${payable.seederEconomics.dividendPerSettledReuseUsd} in credits (cap $${payable.seederEconomics.lifetimeCapUsd}).`,
@@ -996,7 +1025,9 @@ const seedAction: Action = {
     } catch (error) {
       logger.warn({ error }, "Tereno seeding failed");
       const reason = error instanceof Error ? error.message : String(error);
-      return respond(`Seeding did not complete: ${reason}`, false);
+      return respond(error instanceof TerenoPaymentPendingError
+        ? "Seeding payment pending. The original authorization and budget reservation are retained; retry the same bounty input, do not create another payment or restart while unresolved."
+        : `Seeding did not complete: ${reason}`, false);
     }
   },
   examples: [],

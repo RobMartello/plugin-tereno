@@ -53,9 +53,9 @@ The Tereno backend, databases, caches, internal routes and secrets are **not** d
 
 Autonomous agents interact with Base contracts and prediction markets with no shared verification memory.
 
-`plugin-tereno` gives an ElizaOS agent a **bounded verification & shared-cache layer**: before it touches a Base contract or acts on a prediction market question, it buys a structured verdict from [Tereno](https://www.tereno.xyz). **Failed calls are never charged** — x402 settles only after a successful response.
+`plugin-tereno` gives an ElizaOS agent a **bounded verification & shared-cache layer**: before it touches a Base contract or acts on a prediction market question, it buys a structured verdict from [Tereno](https://www.tereno.xyz). **Handler failures are not charged** — x402 settles after a successful handler result. A network timeout can hide a successful settlement; treat it as pending until recovered.
 
-- **No API key, no signup.** The agent's wallet *is* the identity; it pays `$0.01–$0.05` per check in USDC over x402.
+- **No API key, no signup.** The agent's wallet *is* the identity; it pays `$0.01–$0.07` per check in USDC over x402.
 - **Budget-capped.** Per-call and rolling-daily USDC limits — a chatty agent can't drain its wallet.
 - **Fail-closed by default.** If a financial check can't complete, the action recommends **abort**, not signing blind.
 - **Seeder reuse dividends.** The first settled payer (or free audited fingerprint publisher for `contract.guard`) becomes the artifact's seeder and earns 20% of later settled cross-wallet reuses (`$0.002` per reuse) in non-transferable credits.
@@ -94,16 +94,16 @@ Your agent branches on one field: `recommendedAction`.
 
 | Action | Price (hit–miss) | The question it answers |
 |---|---:|---|
-| 🛡️ `TERENO_CHECK_CONTRACT` | $0.02–0.10 | **Is this Base contract safe to touch?** (code present, EIP-1967 proxy implementation/admin, paused state) |
+| 🛡️ `TERENO_CHECK_CONTRACT` | $0.01–0.03 | **Is this Base contract safe to touch?** (code present, EIP-1967 proxy implementation/admin, paused state) |
 | 🚀 `TERENO_TOKEN_LAUNCH_GUARD` | $0.02–0.07 | **Can I get out after I get in?** Simulates sell/exit via `eth_call`, verifies DEX LP depth and burn/lock status, checks owner powers (honeypot, mint, fee traps) |
 | 👥 `TERENO_TOKEN_HOLDERS_GUARD` | $0.01–0.04 | **Who controls this token?** Top 10 holder concentration and deployer-funded cabal Sybil clusters via ETH funding origin graphs |
 | 🪙 `TERENO_TOKEN_INFO` | $0.01–0.03 | What token is this, really? (`name`, `symbol`, `decimals`, `totalSupply`) |
-| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.002–0.005 | Latest Base block, timestamp, base fee and suggested priority fee |
+| ⛽ `TERENO_CHAIN_SNAPSHOT` | $0.01–0.02 | Latest Base block, timestamp, base fee and suggested priority fee |
 | 🎯 `TERENO_PREDICTION_EVIDENCE` | $0.01–0.05 | Structured on-chain + Polymarket evidence brief for a prediction market question |
 | ⚖️ `TERENO_ACP_EVALUATE` | free / open | **Evaluate ERC-8183 Agent Escrow tasks**: audits task delivery, returns EIP-712 `SignedVerdictProof`, score (0-100), and ERC-8004 validation link for on-chain escrow release |
 | 📜 `TERENO_RULES` | free | Read cooperative rules of engagement (/agent.md): cache discounts ($0.01), 20% seeder dividends & artifact sharing |
 | 🔎 `TERENO_VERIFY_EVIDENCE` | free | Read a public artifact reference, validity and recomputation input |
-| 🌱 `TERENO_BOUNTIES` / `TERENO_SEED` | free / $0.005–0.05 | Inspect open network demand and seed it (free signed fingerprint or first settled payer) to earn 20% reuse dividends |
+| 🌱 `TERENO_BOUNTIES` / `TERENO_SEED` | free / $0.01–0.07 | Inspect open network demand and seed it (free signed fingerprint or first settled payer) to earn 20% reuse dividends |
 | 🏅 `TERENO_STANDING` / `TERENO_REPORT_OUTCOME` | free | Check publisher standing, earned credits, and attach signed outcomes |
 | 📈 `TERENO_OPPORTUNITIES` | free | Aggregate unmet agent asks — research signal, not traction |
 | 🤝 `TERENO_PLEDGE_DEMAND` | free | Explicit intent to buy a named future capability; credit only after same-wallet paid proof |
@@ -154,7 +154,7 @@ TERENO_FAIL_MODE=closed       # financial checks abort if the guard can't answer
 | Env | Default | Purpose |
 |---|---|---|
 | `TERENO_PRIVATE_KEY` | — | Wallet that pays x402 (USDC on Base). Falls back to `EVM_PRIVATE_KEY`. |
-| `TERENO_MAX_PRICE_USD` | `0.05` | Per-call USDC cap. Set below the dearest check and those calls are refused before payment, returning `guard unavailable`; `TERENO_PREVIEW` warns when that is the case. |
+| `TERENO_MAX_PRICE_USD` | `0.1` | Per-call USDC cap. Set below the dearest check and those calls are refused before payment, returning `guard unavailable`; `TERENO_PREVIEW` warns when that is the case. |
 | `TERENO_DAILY_BUDGET_USD` | `0.5` | Rolling daily USDC budget. |
 | `TERENO_FAIL_MODE` | `closed` | `closed` → financial checks abort on failure; `open` → degrade to review. |
 | `TERENO_DRY_RUN` | `false` | `true` → no payment, simulated verdict. |
@@ -227,3 +227,21 @@ future calls:
 **[tereno.xyz](https://www.tereno.xyz)** · Shared verification and evidence for agents on Base.
 
 </div>
+
+## Payment recovery (0.6.2)
+
+The plugin requires `tereno-client >=0.5.2`. Existing installs may retain older
+SDK versions in their lockfile: update `plugin-tereno` and verify
+`npm ls tereno-client` before restarting the agent.
+
+If payment becomes uncertain, the plugin retains the original SDK recovery
+closure and reserves its maximum cost against the daily budget. Repeat the same
+action with the same input to resume it. This also applies to payable seeding.
+Concurrent identical calls share one attempt. Financial checks remain fail-closed
+and report `cost.paymentStatus: "pending"`; zero confirmed cost does not prove
+zero payment. No automatic new authorization is created to recover a pending call.
+
+Recovery closures and budget state are process-local. Do not restart or replace
+the agent while a payment is unresolved. After a restart, reconcile the original
+receipt/authorization before authorizing a replacement purchase. This release
+does not provide persistent recovery across process restarts.

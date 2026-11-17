@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2
+
+- Require `tereno-client@^0.5.2` for public quote authentication, V2 price-offer support and same-authorization timeout recovery.
+- Retain pending payment recovery closures and daily budget reservations; repeated identical actions resume the original payment instead of signing another. Concurrent identical calls share one attempt and are accounted once.
+- Report uncertain payment status explicitly and preserve fail-closed financial verdicts.
+- Align contract.guard ($0.01–$0.03) and chain.snapshot ($0.01–$0.02) advertised prices with the current catalog.
+
+
 ## 0.6.1
 
 - Bumped `tereno-client` dependency to `^0.5.1` to pick up the EIP-712 `publishContractFingerprint` resource fix and default 15s HTTP request timeout for cold Base simulations + x402 settlement.

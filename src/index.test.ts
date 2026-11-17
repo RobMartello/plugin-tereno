@@ -231,9 +231,9 @@ describe("defaults can actually buy what the plugin advertises", () => {
   });
 
   test("priceLabel renders a range for tiered reads", () => {
-    expect(priceLabel("contract.guard")).toBe("$0.02-0.1");
+    expect(priceLabel("contract.guard")).toBe("$0.01-0.03");
     expect(priceLabel("token.metadata")).toBe("$0.01-0.03");
-    expect(priceLabel("chain.snapshot")).toBe("$0.002-0.005");
+    expect(priceLabel("chain.snapshot")).toBe("$0.01-0.02");
     expect(priceLabel("prediction.evidence")).toBe("$0.01-0.05");
     expect(priceLabel("token.launch.guard")).toBe("$0.02-0.07");
     expect(priceLabel("token.holders.guard")).toBe("$0.01-0.04");
