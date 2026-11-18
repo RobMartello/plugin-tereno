@@ -946,6 +946,52 @@ function bountyToCapabilityInput(bounty: Bounty): PluginCapabilityInput | null {
   return null;
 }
 
+interface GrifosQuest {
+  questId: string;
+  type: "contract_investigation" | "prediction_audit";
+  difficulty: string;
+  status: string;
+  target: string;
+  title: string;
+  objective: string;
+  requiredTools: string[];
+  demandOriginCount: number;
+}
+
+async function fetchQuests(limit = 20): Promise<GrifosQuest[]> {
+  const baseUrl = env("TERENO_API_URL", "https://www.tereno.xyz").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/api/v1/quests?limit=${limit}`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return [];
+  const body = (await response.json()) as { quests?: GrifosQuest[] };
+  return body.quests ?? [];
+}
+
+const questsAction: Action = {
+  name: "TERENO_QUESTS",
+  similes: ["GRIFOS_QUESTS", "INVESTIGATION_QUESTS", "LIST_QUESTS"],
+  description:
+    "List open Γρίφος investigation quests on the Tereno Investigation Network (contract_investigation and prediction_audit). Free. Verified contributions earn XP, $0.005 credits, 5 free Context Graph reads, and 20% reuse dividends.",
+  validate: async () => true,
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state: State | undefined,
+    _options: unknown,
+    callback: HandlerCallback | undefined,
+  ): Promise<ActionResult> => {
+    const quests = await fetchQuests();
+    const text = quests.length
+      ? `Open Γρίφος investigation quests:\n${quests.map((q) => `- ${q.questId} [${q.type} · ${q.difficulty}] ${q.title} · target: ${q.target} · tools: ${q.requiredTools.join(", ")}`).join("\n")}`
+      : "No qualified Γρίφος investigation quests are open right now.";
+    await callback?.({ text, actions: ["TERENO_QUESTS"], source: message.content.source });
+    return { success: true, text, data: { quests } };
+  },
+  examples: [],
+};
+
 const bountiesAction: Action = {
   name: "TERENO_BOUNTIES",
   similes: ["WHAT_DOES_THE_NETWORK_WANT", "OPEN_BOUNTIES", "TERENO_DEMAND"],
@@ -1225,8 +1271,8 @@ export const terenoPlugin: Plugin = {
     checkContract, tokenInfo, chainSnapshot, predictionEvidence, tokenLaunchGuard, tokenHoldersGuard,
     // Free verification & discovery helpers.
     evidenceArtifactAction, acpEvaluateAction, previewAction, rulesAction, catalogAction, opportunitiesAction, pledgeDemandAction,
-    // Cooperative loop (seeder dividends, bounties, standing & outcomes).
-    bountiesAction, seedAction, standingAction, reportOutcomeAction,
+    // Cooperative loop (seeder dividends, quests, bounties, standing & outcomes).
+    questsAction, bountiesAction, seedAction, standingAction, reportOutcomeAction,
   ],
 };
 
