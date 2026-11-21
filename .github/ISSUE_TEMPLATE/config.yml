@@ -7,5 +7,5 @@ contact_links:
     url: https://www.tereno.xyz/api/v1/capabilities
     about: Live catalog with prices, status and endpoints.
   - name: Security vulnerabilities
-    url: https://github.com/RobMartello/plugin-tereno/security/advisories/new
+    url: https://github.com/tereno-xyz/plugin-tereno/security/advisories/new
     about: Please report vulnerabilities privately — never in a public issue.

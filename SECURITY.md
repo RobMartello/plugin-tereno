@@ -8,7 +8,7 @@ endpoints. Security reports are taken seriously and answered quickly.
 **Do not open a public issue for vulnerabilities.**
 
 Use GitHub's private reporting:
-[Report a vulnerability](https://github.com/RobMartello/plugin-tereno/security/advisories/new)
+[Report a vulnerability](https://github.com/tereno-xyz/plugin-tereno/security/advisories/new)
 (Security tab → "Report a vulnerability"). You will get a response within 48
 hours.
 

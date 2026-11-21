@@ -568,7 +568,7 @@ const checkContract = paidAction({
   name: "TERENO_CHECK_CONTRACT",
   similes: ["IS_CONTRACT_SAFE", "CONTRACT_GUARD", "CHECK_ADDRESS_SAFETY"],
   description:
-    `Before interacting with a Base contract, buy a bounded allow/review/block verdict (code present, EIP-1967 proxy implementation/admin, paused state) via Tereno contract.guard (${priceLabel("contract.guard")} USDC over x402 — first settled payer or free audited publisher becomes the seeder and earns 20% of later cross-wallet reuses up to $0.18). Use when the user asks whether a Base contract or token address is safe to interact with.`,
+    `Before interacting with a Base contract, buy a bounded allow/review/block verdict (code present, EIP-1967 proxy implementation/admin, paused state) via Tereno contract.guard (${priceLabel("contract.guard")} USDC over x402 — first settled payer or free audited publisher becomes the seeder and earns 20% of later cross-wallet reuses, up to the cold price in credit). Use when the user asks whether a Base contract or token address is safe to interact with.`,
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "contract.guard", address } : null;
@@ -581,7 +581,7 @@ const tokenInfo = paidAction({
   name: "TERENO_TOKEN_INFO",
   similes: ["TOKEN_METADATA", "WHAT_TOKEN_IS_THIS", "TOKEN_LOOKUP"],
   description:
-    `Read a Base token's on-chain identity — name, symbol, decimals, total supply — via Tereno token.metadata (${priceLabel("token.metadata")} USDC over x402 — you pay less when another agent already computed it, and the first settled payer earns $0.002 per cross-wallet reuse up to $0.15). Use when the user asks what a token address is.`,
+    `Read a Base token's on-chain identity — name, symbol, decimals, total supply — via Tereno token.metadata (${priceLabel("token.metadata")} USDC over x402 — you pay less when another agent already computed it, and the first settled payer earns $0.002-0.004 per cross-wallet reuse, up to the cold price in credit). Use when the user asks what a token address is.`,
   buildInput: (message) => {
     const address = firstAddress(message);
     return address ? { capabilityId: "token.metadata", address } : null;
@@ -593,7 +593,7 @@ const chainSnapshot = paidAction({
   name: "TERENO_CHAIN_SNAPSHOT",
   similes: ["BASE_GAS_PRICE", "LATEST_BASE_BLOCK", "BASE_CHAIN_STATE"],
   description:
-    `Get the current Base chain state — latest block, timestamp, base fee and suggested gas fees — via Tereno chain.snapshot (${priceLabel("chain.snapshot")} USDC over x402 — you pay less when another agent already computed it, and the first settled payer earns $0.002 per cross-wallet reuse up to $0.10). No parameters needed.`,
+    `Get the current Base chain state — latest block, timestamp, base fee and suggested gas fees — via Tereno chain.snapshot (${priceLabel("chain.snapshot")} USDC over x402 — you pay less when another agent already computed it, and the first settled payer earns $0.002 per cross-wallet reuse, up to the cold price in credit). No parameters needed.`,
   buildInput: () => ({ capabilityId: "chain.snapshot" }),
   missingInputText: "",
 });
@@ -602,7 +602,7 @@ const predictionEvidence = paidAction({
   name: "TERENO_PREDICTION_EVIDENCE",
   similes: ["PREDICTION_MARKET_EVIDENCE", "POLYMARKET_EVIDENCE", "VERIFY_PREDICTION_QUESTION"],
   description:
-    `Gather structured, reproducible on-chain and Polymarket evidence for a prediction market question via Tereno prediction.evidence (${priceLabel("prediction.evidence")} USDC over x402 — you pay $0.01 on a cache hit, and the first settled payer earns $0.002 per cross-wallet reuse up to $0.25). Pass a prediction question (and optional Polymarket URL or JSON with question/market/marketUrl).`,
+    `Gather structured, reproducible on-chain and Polymarket evidence for a prediction market question via Tereno prediction.evidence (${priceLabel("prediction.evidence")} USDC over x402 — you pay $0.01 on a cache hit, and the first settled payer earns $0.002-0.004 per cross-wallet reuse, up to the cold price in credit). Pass a prediction question (and optional Polymarket URL or JSON with question/market/marketUrl).`,
   buildInput: (message) => predictionEvidenceInput(message),
   missingInputText:
     "I need a prediction market question (at least 5 characters, optionally with a Polymarket URL) to gather evidence.",
@@ -1213,7 +1213,7 @@ const previewAction: Action = {
       `• TERENO_CHAIN_SNAPSHOT (${priceLabel("chain.snapshot")}) — latest Base block, timestamp, base fee & gas priority fee`,
       `• TERENO_PREDICTION_EVIDENCE (${priceLabel("prediction.evidence")}) — structured on-chain + Polymarket evidence brief for a prediction market question`,
       "• TERENO_VERIFY_EVIDENCE (free) — provenance and recomputation input for a public artifact",
-      "• TERENO_BOUNTIES (free) / TERENO_SEED — seed open demand or publish signed contract fingerprints to earn 20% reuse dividends ($0.002/reuse)",
+      "• TERENO_BOUNTIES (free) / TERENO_SEED — seed open demand or publish signed contract fingerprints to earn 20% reuse dividends ($0.002-0.008/reuse)",
       "• TERENO_OPPORTUNITIES (free) / TERENO_PLEDGE_DEMAND (free, explicit) — observed demand, never PMF proof",
       "Every check returns: decision, riskLevel, reason, exposure, cost, recommendedAction.",
       `Config: per-call cap $${maxPriceUsd()} · daily budget $${env("TERENO_DAILY_BUDGET_USD", String(DEFAULT_DAILY_BUDGET_USD))} · fail-${failClosed() ? "closed" : "open"}${dryRunEnabled() ? " · DRY-RUN (no payment)" : ""}`,
@@ -1250,7 +1250,7 @@ const rulesAction: Action = {
       await callback?.({ text, actions: ["TERENO_RULES"], source: message.content.source });
       return { success: true, text };
     } catch {
-      const fallback = "Tereno Agent Rules: Reusing verified artifacts costs $0.01 (vs $0.10 compute). First settled payer or free audited fingerprint publisher earns 20% ($0.002) of every settled cross-wallet reuse in discount credits. Query /api/v1/bounties to see open demand.";
+      const fallback = "Tereno Agent Rules: Reusing verified artifacts costs $0.01 ($0.02 for token.launch.guard) vs up to $0.07 to compute. First settled payer or free audited fingerprint publisher earns 20% ($0.002-0.008) of every settled cross-wallet reuse in discount credits. Query /api/v1/bounties to see open demand.";
       await callback?.({ text: fallback, actions: ["TERENO_RULES"], source: message.content.source });
       return { success: true, text: fallback };
     }

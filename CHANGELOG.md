@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+- Repository moved to the official organization: https://github.com/tereno-xyz/plugin-tereno.
+- Require `tereno-client@^0.6.2` (Base mainnet default, actionable budget and network errors).
+- Reuse dividend figures now match the live catalog: 20% of the reuse price ($0.002-0.008 per reuse), capped at the capability's cold price in credit (tripled with an ERC-8004 publisher attestation). The old $0.10-$0.25 lifetime caps were out of date.
+- `npmPackage` metadata corrected to `plugin-tereno`.
+
 ## 0.6.2
 
 - Require `tereno-client@^0.5.2` for public quote authentication, V2 price-offer support and same-authorization timeout recovery.

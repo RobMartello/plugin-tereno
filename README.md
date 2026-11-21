@@ -16,7 +16,7 @@ Buy bounded on-chain verdicts and prediction evidence over x402 (`contract.guard
 [![Base](https://img.shields.io/badge/Base-0052FF?style=for-the-badge&logo=coinbase&logoColor=white)](https://base.org)
 [![x402](https://img.shields.io/badge/x402%20%C2%B7%20USDC-2775CA?style=for-the-badge)](https://www.x402.org)
 
-[![CI](https://img.shields.io/github/actions/workflow/status/RobMartello/plugin-tereno/ci.yml?style=flat-square&label=CI)](https://github.com/RobMartello/plugin-tereno/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/tereno-xyz/plugin-tereno/ci.yml?style=flat-square&label=CI)](https://github.com/tereno-xyz/plugin-tereno/actions)
 [![license](https://img.shields.io/npm/l/plugin-tereno?style=flat-square&color=green)](./LICENSE)
 [![fail-closed](https://img.shields.io/badge/default-fail--closed-critical?style=flat-square)](#fail-open-vs-fail-closed)
 
@@ -58,7 +58,7 @@ Autonomous agents interact with Base contracts and prediction markets with no sh
 - **No API key, no signup.** The agent's wallet *is* the identity; it pays `$0.01–$0.07` per check in USDC over x402.
 - **Budget-capped.** Per-call and rolling-daily USDC limits — a chatty agent can't drain its wallet.
 - **Fail-closed by default.** If a financial check can't complete, the action recommends **abort**, not signing blind.
-- **Seeder reuse dividends.** The first settled payer (or free audited fingerprint publisher for `contract.guard`) becomes the artifact's seeder and earns 20% of later settled cross-wallet reuses (`$0.002` per reuse) in non-transferable credits.
+- **Seeder reuse dividends.** The first settled payer (or free audited fingerprint publisher for `contract.guard`) becomes the artifact's seeder and earns 20% of later settled cross-wallet reuses (`$0.002`–`$0.008` per reuse) in non-transferable credits.
 
 ## 🚦 The standardized verdict
 
@@ -195,23 +195,28 @@ answer pays the `$0.01` cache-hit price, and the seeder earns `20%` (`$0.002`) o
 each settled cross-wallet reuse in non-transferable credits that discount its own
 future calls:
 
-- `contract.guard`: `$0.002`/reuse (lifetime cap `$0.15`, or `$0.18` when published via free audited EIP-712 fingerprint)
-- `token.metadata`: `$0.002`/reuse (lifetime cap `$0.15`)
-- `chain.snapshot`: `$0.002`/reuse (lifetime cap `$0.10`)
-- `prediction.evidence`: `$0.002`/reuse (lifetime cap `$0.25`)
+- `contract.guard`: `$0.002`–`$0.004`/reuse (lifetime cap `$0.03`)
+- `token.metadata`: `$0.002`–`$0.004`/reuse (lifetime cap `$0.03`)
+- `chain.snapshot`: `$0.002`/reuse (lifetime cap `$0.02`)
+- `prediction.evidence`: `$0.002`–`$0.004`/reuse (lifetime cap `$0.05`)
+- `token.launch.guard`: `$0.004`–`$0.008`/reuse (lifetime cap `$0.07`)
+- `token.holders.guard`: `$0.002`–`$0.004`/reuse (lifetime cap `$0.04`)
+
+The lifetime cap equals the capability's cold price, and triples for a seeder holding an
+ERC-8004 publisher attestation. `GET https://www.tereno.xyz/api/v1/capabilities` is authoritative.
 
 | Action | Cost | What it does |
 |---|---:|---|
 | `TERENO_BOUNTIES` | free | See the work the network will pay to have seeded next |
-| `TERENO_SEED` | free / $0.02–0.05 | Seed a bounty (publish a signed fingerprint for free, or pay to be first payer) |
+| `TERENO_SEED` | free / $0.02–0.07 | Seed a bounty (publish a signed fingerprint for free, or pay to be first payer) |
 | `TERENO_STANDING` | free | The agent's audited track record and earned credits |
 | `TERENO_REPORT_OUTCOME` | free | Attach a signed outcome to a settled verdict |
 
 ## 🤝 Support & community
 
 - 💬 **Questions / setup** → [Tereno Discord](https://discord.gg/YsgGSRBxn)
-- 🐛 **Bugs** → [issues](https://github.com/RobMartello/plugin-tereno/issues) · ⚠️ never paste private keys or `.env`
-- 🔒 **Vulnerabilities** → [report privately](https://github.com/RobMartello/plugin-tereno/security/advisories/new) · [SECURITY.md](SECURITY.md)
+- 🐛 **Bugs** → [issues](https://github.com/tereno-xyz/plugin-tereno/issues) · ⚠️ never paste private keys or `.env`
+- 🔒 **Vulnerabilities** → [report privately](https://github.com/tereno-xyz/plugin-tereno/security/advisories/new) · [SECURITY.md](SECURITY.md)
 
 ## 🔗 Links
 

@@ -1,6 +1,6 @@
 {
   "name": "plugin-tereno",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Pre-action safety, honeypot exit simulation, cabal holder clusters, chain reads, prediction evidence and ERC-8183 escrow evaluations for ElizaOS agents over x402 on Base: buy bounded verdicts (contract.guard, token.metadata, chain.snapshot, prediction.evidence, token.launch.guard, token.holders.guard) with per-call + daily USDC caps, fail-closed defaults, dry-run mode and seeder reuse dividends.",
   "type": "module",
   "main": "./dist/index.js",
@@ -38,7 +38,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RobMartello/plugin-tereno.git"
+    "url": "git+https://github.com/tereno-xyz/plugin-tereno.git"
   },
   "agentConfig": {
     "pluginType": "elizaos:plugin:1.0.0",
@@ -82,7 +82,7 @@
     }
   },
   "dependencies": {
-    "tereno-client": "^0.5.2"
+    "tereno-client": "^0.6.2"
   },
   "peerDependencies": {
     "@elizaos/core": ">=1.0.0",
@@ -97,5 +97,9 @@
   "license": "MIT",
   "packageType": "plugin",
   "platform": "node",
-  "npmPackage": "@robmartello/plugin-tereno"
+  "npmPackage": "plugin-tereno",
+  "homepage": "https://www.tereno.xyz",
+  "bugs": {
+    "url": "https://github.com/tereno-xyz/plugin-tereno/issues"
+  }
 }
