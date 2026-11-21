@@ -10,7 +10,13 @@ import {
   DEFAULT_DAILY_BUDGET_USD,
   dearestCapabilityUsd,
   priceLabel,
+  PLUGIN_VERSION,
+  refreshPricesFromCatalog,
+  rebuildPricedDescriptions,
+  checkForUpdate,
+  lastUpdateStatus,
 } from "./index.ts";
+import pkg from "../package.json";
 
 const COST = { capUsd: 0.05, dailySpentUsd: 0.01 };
 const BASE = "https://www.tereno.xyz";
@@ -238,5 +244,57 @@ describe("defaults can actually buy what the plugin advertises", () => {
     expect(priceLabel("token.launch.guard")).toBe("$0.02-0.07");
     expect(priceLabel("token.holders.guard")).toBe("$0.01-0.04");
     expect(priceLabel("nope.not.real")).toBe("price unknown");
+  });
+});
+
+describe("startup: live prices, update notice, news", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test("PLUGIN_VERSION matches package.json", () => {
+    expect(PLUGIN_VERSION).toBe(pkg.version);
+  });
+
+  test("live catalog overwrites the fallback table and the descriptions follow", async () => {
+    const saved = { ...CAPABILITY_PRICE_USD["chain.snapshot"] };
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      capabilities: [{ id: "chain.snapshot", pricing: { cacheHitUsd: 0.01, fingerprintHitUsd: 0.02, cacheMissUsd: 0.03 } }],
+    }), { status: 200 })) as typeof fetch;
+    expect(await refreshPricesFromCatalog(BASE)).toBe(true);
+    rebuildPricedDescriptions();
+    const action = terenoPlugin.actions!.find((a) => a.name === "TERENO_CHAIN_SNAPSHOT")!;
+    expect(action.description).toContain("$0.01-0.03");
+    CAPABILITY_PRICE_USD["chain.snapshot"] = saved;
+    rebuildPricedDescriptions();
+    expect(action.description).toContain("$0.01-0.02");
+  });
+
+  test("an unreachable catalog keeps the fallback and never throws", async () => {
+    globalThis.fetch = (async () => { throw new Error("offline"); }) as typeof fetch;
+    expect(await refreshPricesFromCatalog(BASE)).toBe(false);
+    expect(priceLabel("token.launch.guard")).toBe("$0.02-0.07");
+  });
+
+  test("update check reports a newer version and the news", async () => {
+    let asked = "";
+    globalThis.fetch = (async (url: string) => {
+      asked = String(url);
+      return new Response(JSON.stringify({
+        latest: "9.9.9", updateAvailable: true, message: "plugin-tereno 0.8.0 is installed; 9.9.9 is available.",
+        news: [{ date: "2026-11-20", title: "Launch Hunt", summary: "s", url: "https://www.tereno.xyz/api/v1/hunt" }],
+      }), { status: 200 });
+    }) as typeof fetch;
+    const status = await checkForUpdate(BASE);
+    expect(asked).toContain(`client=plugin-tereno&version=${PLUGIN_VERSION}`);
+    expect(status?.updateAvailable).toBe(true);
+    expect(lastUpdateStatus()?.news[0].title).toBe("Launch Hunt");
+  });
+
+  test("TERENO_UPDATE_CHECK=false skips the request", async () => {
+    process.env.TERENO_UPDATE_CHECK = "false";
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response("{}"); }) as typeof fetch;
+    expect(await checkForUpdate(BASE)).toBeNull();
+    expect(called).toBe(false);
   });
 });

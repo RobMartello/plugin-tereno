@@ -163,6 +163,7 @@ TERENO_FAIL_MODE=closed       # financial checks abort if the guard can't answer
 | `TERENO_API_URL` | `https://www.tereno.xyz` | API origin. |
 | `TERENO_RPC_URL` | `https://mainnet.base.org` | RPC for local fingerprint work. |
 | `TERENO_TELEMETRY` | `on` | `off` → send no anonymous usage telemetry. |
+| `TERENO_UPDATE_CHECK` | `true` | `false` → skip the startup check for a newer plugin version. Prices are still refreshed from the live catalog. |
 | `TERENO_EVIDENCE_INSTALLATION_ID` | — | Optional stable random id for this installation. It is hashed only when the agent resolves evidence received from another agent; never use a wallet or secret. |
 
 ### Fail-open vs fail-closed
@@ -179,6 +180,13 @@ TERENO_FAIL_MODE=closed       # financial checks abort if the guard can't answer
 The plugin **never transmits your private key, prompts, secrets or transaction
 content** anywhere. The key is used locally to sign x402 payments and EIP-712
 messages only.
+
+### Always current, without reinstalling
+
+At startup the plugin makes two free, bounded requests (at most 4 seconds, never able to block or fail startup):
+
+- `GET /api/v1/capabilities` refreshes every price the actions quote, so a repricing reaches your agent without a new plugin version. What is charged always comes from the 402 challenge.
+- `GET /api/v1/clients?client=plugin-tereno&version=<installed>` logs a warning when a newer plugin exists, and `TERENO_PREVIEW` / `TERENO_RULES` show it together with what is new on Tereno.
 
 Anonymous, opt-out telemetry (`TERENO_TELEMETRY=off` to disable) sends a strict
 allowlist to help improve the network: plugin version, a **hashed** wallet

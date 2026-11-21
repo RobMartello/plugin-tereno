@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+- Prices are read from the live catalog at startup (`GET /api/v1/capabilities`) and the action descriptions are rebuilt from them. The built-in table is only the offline fallback.
+- Startup update check (`GET /api/v1/clients`): logs a warning when a newer plugin-tereno exists; `TERENO_PREVIEW` and `TERENO_RULES` show it with platform news (Launch Hunt, the free launches feed). Opt out with `TERENO_UPDATE_CHECK=false`.
+- `TERENO_PREVIEW` lists all six checks, including the launch and holders guards.
+- `TERENO_RULES` offline fallback no longer carries prices that can go stale.
+- `PLUGIN_VERSION` reports the real version (it was stuck at 0.6.2); a test keeps it equal to package.json.
+
 ## 0.7.1
 
 - Repository moved to the official organization: https://github.com/tereno-xyz/plugin-tereno.
